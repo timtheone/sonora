@@ -1,5 +1,6 @@
 use crate::config::{AppSettings, ModelProfile};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -65,20 +66,50 @@ pub fn resolve_model_candidates(
     settings: &AppSettings,
     resource_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
+    let default_relative = default_model_relative_path(settings.model_profile);
+    let default_file_name = Path::new(default_relative)
+        .file_name()
+        .map(|value| value.to_os_string())
+        .unwrap_or_default();
+
+    let mut candidates = Vec::<PathBuf>::new();
+
     if let Some(path) = &settings.model_path {
-        return vec![PathBuf::from(path)];
+        let override_path = PathBuf::from(path);
+        candidates.push(override_path.clone());
+
+        if override_path.is_relative() {
+            candidates.push(PathBuf::from("src-tauri/resources").join(&override_path));
+            if let Some(resources) = resource_dir {
+                candidates.push(resources.join(&override_path));
+                candidates.push(resources.join("resources").join(&override_path));
+            }
+        }
     }
 
-    let default_relative = default_model_relative_path(settings.model_profile);
-    let mut candidates = vec![PathBuf::from(default_relative)];
+    candidates.push(PathBuf::from(default_relative));
 
     candidates.push(PathBuf::from("src-tauri/resources").join(default_relative));
 
     if let Some(resources) = resource_dir {
         candidates.push(resources.join(default_relative));
+        candidates.push(resources.join("resources").join(default_relative));
+        candidates.push(resources.join("models").join(&default_file_name));
+        candidates.push(resources.join(&default_file_name));
     }
 
-    candidates
+    dedupe_paths(candidates)
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::<String>::new();
+    paths
+        .into_iter()
+        .filter(|path| {
+            let key = path.to_string_lossy().to_string();
+            seen.insert(key)
+        })
+        .collect()
 }
 
 pub fn resolve_model_path(settings: &AppSettings, resource_dir: Option<&Path>) -> PathBuf {
@@ -168,6 +199,9 @@ mod tests {
             resolve_model_path(&settings, None).to_string_lossy(),
             "C:/models/custom.bin"
         );
+
+        let candidates = resolve_model_candidates(&settings, None);
+        assert!(candidates.len() > 1);
     }
 
     #[test]
