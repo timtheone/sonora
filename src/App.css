@@ -38,3 +38,29 @@ h1 {
   margin: 0;
   padding-left: 1.2rem;
 }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+button {
+  border: 1px solid #c9d3e5;
+  border-radius: 8px;
+  background: #f4f7fe;
+  color: #1a1a1a;
+  padding: 0.45rem 0.75rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  margin: 0;
+  color: #b0302d;
+}

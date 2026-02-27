@@ -1,4 +1,4 @@
-# Architecture (Phase 0)
+# Architecture (Phase 0/1)
 
 ## Objectives
 
@@ -17,20 +17,21 @@
 ## Runtime services
 
 1. **HotkeyService (Rust)**
-   - Registers/unregisters global hotkey.
-   - Emits activation events to DictationService.
+   - Phase 1: hotkey event handling commands are wired (`phase1_hotkey_down`, `phase1_hotkey_up`).
+   - Planned next: OS-global hotkey registration.
 
 2. **AudioService (Rust)**
-   - Captures microphone audio at 16 kHz mono using `cpal`.
-   - Buffers frames into VAD-friendly chunks.
+   - Phase 1: 16 kHz mono format contracts and sample helpers are in place.
+   - Planned next: live mic capture via `cpal`.
 
 3. **VadService (Rust)**
    - Segments speech from silence.
    - Emits speech segments to TranscriptionService.
 
 4. **TranscriptionService (Rust)**
-   - Executes whisper.cpp sidecar with configured model.
-   - Returns partial/final text.
+   - Phase 1: transcriber abstraction and whisper.cpp sidecar argument builder are implemented.
+   - Current runtime uses stub transcriber for end-to-end command/event wiring.
+   - Planned next: invoke real whisper.cpp sidecar process.
 
 5. **InsertionService (Rust)**
    - Direct typing via OS adapters.
@@ -48,9 +49,20 @@ States:
 - `idle`
 - `listening`
 - `transcribing`
-- `inserting`
+
+Phase 1 runtime currently uses:
+
+- `idle`
+- `listening`
+- `transcribing`
 
 Canonical flow:
+
+Phase 1 flow:
+
+`idle -> listening -> transcribing -> listening`
+
+Planned full flow:
 
 `idle -> listening -> transcribing -> inserting -> idle`
 
@@ -73,6 +85,7 @@ Mode rules:
 - **TDD rule:** tests first for each behavior change.
 - **TypeScript tests:** Vitest (`pnpm test`)
   - dictation state machine transitions
+  - audio chunk helper behavior
   - settings normalization and defaults
 - **Rust tests:** `cargo test` (`pnpm test:rust`)
   - default settings and model/profile invariants

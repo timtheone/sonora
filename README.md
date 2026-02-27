@@ -7,7 +7,7 @@ Offline desktop dictation app (Windows, macOS, Linux X11) built with Tauri + Typ
 - Tauri v2
 - React + TypeScript (frontend)
 - Rust (native backend)
-- whisper.cpp sidecar (planned in Phase 1)
+- whisper.cpp sidecar integration (Phase 1 in progress)
 - pnpm (JavaScript package manager)
 
 ## Development
