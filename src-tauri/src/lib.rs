@@ -37,7 +37,7 @@ impl Default for PipelineStore {
 }
 
 #[cfg(feature = "desktop")]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct TranscriptPayload {
     text: String,
 }
