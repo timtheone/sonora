@@ -66,3 +66,5 @@ pnpm test:all
 
 - This repository follows TDD for all new features.
 - Current scope is English-only with `Ctrl/Cmd + Shift + U` default hotkey.
+- Settings are persisted locally via the Rust backend store.
+- Phase 2 currently includes insertion status/history plumbing; OS-native insertion adapters are next.

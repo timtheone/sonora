@@ -1,4 +1,4 @@
-# Architecture (Phase 0/1)
+# Architecture (Phase 0/1/2)
 
 ## Objectives
 
@@ -34,13 +34,13 @@
    - Planned next: invoke real whisper.cpp sidecar process.
 
 5. **InsertionService (Rust)**
-   - Direct typing via OS adapters.
-   - Clipboard-paste fallback if direct insertion fails.
-   - Writes insertion outcomes to recent history ring buffer (size 3).
+   - Phase 2: fallback-aware insertion status and recent history ring buffer (size 3) are implemented.
+   - Current direct/clipboard OS adapters are stubbed for command/event wiring.
+   - Planned next: wire per-OS direct insertion adapters.
 
 6. **SettingsService (TS + Rust)**
-   - Persists validated settings.
-   - Applies runtime updates (hotkey, mode, profile, mic).
+   - Phase 2: persists settings to disk and applies runtime mode updates.
+   - Planned next: wire global hotkey registration updates from settings.
 
 ## Dictation state machine
 
@@ -89,6 +89,8 @@ Mode rules:
   - settings normalization and defaults
 - **Rust tests:** `cargo test` (`pnpm test:rust`)
   - default settings and model/profile invariants
+  - settings persistence and patching
+  - insertion fallback resolution/history truncation
   - adapter and orchestration units as they are added
 
 ## CI command baseline
