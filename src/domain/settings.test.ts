@@ -1,0 +1,26 @@
+import { describe, expect, it } from "vitest";
+import { DEFAULT_SETTINGS, normalizeSettings } from "./settings";
+
+describe("settings", () => {
+  it("returns defaults when no settings are provided", () => {
+    expect(normalizeSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("merges partial settings", () => {
+    expect(
+      normalizeSettings({
+        mode: "push_to_talk",
+        modelProfile: "fast",
+      }),
+    ).toMatchObject({
+      mode: "push_to_talk",
+      modelProfile: "fast",
+      hotkey: DEFAULT_SETTINGS.hotkey,
+      language: "en",
+    });
+  });
+
+  it("falls back to default hotkey for empty value", () => {
+    expect(normalizeSettings({ hotkey: " " }).hotkey).toBe(DEFAULT_SETTINGS.hotkey);
+  });
+});

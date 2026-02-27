@@ -1,0 +1,40 @@
+:root {
+  color-scheme: light;
+  font-family: "Source Sans 3", system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #1a1a1a;
+  background: radial-gradient(circle at top left, #eef5ff 0%, #f9f7ee 55%, #f7f7f7 100%);
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.panel {
+  border: 1px solid #d6deeb;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  background: #ffffffb8;
+  backdrop-filter: blur(4px);
+}
+
+.panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.panel ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
