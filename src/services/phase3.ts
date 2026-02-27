@@ -20,6 +20,7 @@ export interface ModelStatus {
   hardware_tier: HardwareTier;
   model_path: string;
   model_exists: boolean;
+  checked_paths: string[];
   tuning: ProfileTuning;
 }
 

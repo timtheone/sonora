@@ -31,13 +31,15 @@ use serde::Serialize;
 #[cfg(feature = "desktop")]
 use settings_store::AppSettingsPatch;
 #[cfg(feature = "desktop")]
+use std::path::PathBuf;
+#[cfg(feature = "desktop")]
 use std::sync::Mutex;
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 #[cfg(feature = "desktop")]
-use transcriber::StubTranscriber;
+use tauri::Manager;
 #[cfg(feature = "desktop")]
-use std::path::PathBuf;
+use transcriber::StubTranscriber;
 
 #[cfg(feature = "desktop")]
 struct PipelineStore {
@@ -200,12 +202,20 @@ fn phase3_auto_select_profile(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn phase3_get_model_status(state: tauri::State<'_, SettingsState>) -> Result<ModelStatus, String> {
+fn phase3_get_model_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SettingsState>,
+) -> Result<ModelStatus, String> {
     let settings = state
         .settings
         .lock()
         .map_err(|_| "failed to acquire settings state".to_string())?;
-    Ok(build_model_status(&settings, current_logical_cores()))
+    let resource_dir = app.path().resource_dir().ok();
+    Ok(build_model_status(
+        &settings,
+        current_logical_cores(),
+        resource_dir.as_deref(),
+    ))
 }
 
 #[cfg(feature = "desktop")]

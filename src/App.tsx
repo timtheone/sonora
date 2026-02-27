@@ -449,6 +449,10 @@ function App() {
             <li>Active profile: {modelStatus.profile}</li>
             <li>Resolved model path: {modelStatus.model_path}</li>
             <li>Model exists: {modelStatus.model_exists ? "yes" : "no"}</li>
+            <li>Tried paths:</li>
+            {modelStatus.checked_paths.map((path, index) => (
+              <li key={`checked-path-${index}`}>{path}</li>
+            ))}
             <li>
               Tuning: min chunk {modelStatus.tuning.min_chunk_samples} samples, cadence {modelStatus.tuning.partial_cadence_ms} ms
             </li>

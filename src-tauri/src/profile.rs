@@ -1,6 +1,6 @@
 use crate::config::{AppSettings, ModelProfile};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +22,7 @@ pub struct ModelStatus {
     pub hardware_tier: HardwareTier,
     pub model_path: String,
     pub model_exists: bool,
+    pub checked_paths: Vec<String>,
     pub tuning: ProfileTuning,
 }
 
@@ -60,23 +61,58 @@ pub fn default_model_relative_path(profile: ModelProfile) -> &'static str {
     }
 }
 
-pub fn resolve_model_path(settings: &AppSettings) -> PathBuf {
+pub fn resolve_model_candidates(
+    settings: &AppSettings,
+    resource_dir: Option<&Path>,
+) -> Vec<PathBuf> {
     if let Some(path) = &settings.model_path {
-        return PathBuf::from(path);
+        return vec![PathBuf::from(path)];
     }
 
-    PathBuf::from(default_model_relative_path(settings.model_profile))
+    let default_relative = default_model_relative_path(settings.model_profile);
+    let mut candidates = vec![PathBuf::from(default_relative)];
+
+    candidates.push(PathBuf::from("src-tauri/resources").join(default_relative));
+
+    if let Some(resources) = resource_dir {
+        candidates.push(resources.join(default_relative));
+    }
+
+    candidates
 }
 
-pub fn build_model_status(settings: &AppSettings, logical_cores: usize) -> ModelStatus {
+pub fn resolve_model_path(settings: &AppSettings, resource_dir: Option<&Path>) -> PathBuf {
+    let candidates = resolve_model_candidates(settings, resource_dir);
+    for candidate in &candidates {
+        if candidate.exists() {
+            return candidate.clone();
+        }
+    }
+
+    candidates
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from(default_model_relative_path(settings.model_profile)))
+}
+
+pub fn build_model_status(
+    settings: &AppSettings,
+    logical_cores: usize,
+    resource_dir: Option<&Path>,
+) -> ModelStatus {
     let hardware_tier = detect_hardware_tier(logical_cores);
-    let model_path = resolve_model_path(settings);
+    let checked_paths = resolve_model_candidates(settings, resource_dir)
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let model_path = resolve_model_path(settings, resource_dir);
 
     ModelStatus {
         profile: settings.model_profile,
         hardware_tier,
         model_path: model_path.to_string_lossy().to_string(),
         model_exists: model_path.exists(),
+        checked_paths,
         tuning: tuning_for_profile(settings.model_profile),
     }
 }
@@ -115,7 +151,7 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_model_path(&settings).to_string_lossy(),
+            resolve_model_path(&settings, None).to_string_lossy(),
             "models/ggml-tiny.en-q8_0.bin"
         );
     }
@@ -129,9 +165,23 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_model_path(&settings).to_string_lossy(),
+            resolve_model_path(&settings, None).to_string_lossy(),
             "C:/models/custom.bin"
         );
+    }
+
+    #[test]
+    fn includes_resource_candidate_when_provided() {
+        let settings = AppSettings {
+            model_profile: ModelProfile::Balanced,
+            model_path: None,
+            ..AppSettings::default()
+        };
+
+        let candidates = resolve_model_candidates(&settings, Some(Path::new("/app/resources")));
+        assert!(candidates
+            .iter()
+            .any(|path| path == &PathBuf::from("/app/resources/models/ggml-base.en-q5_1.bin")));
     }
 
     #[test]

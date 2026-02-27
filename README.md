@@ -36,6 +36,19 @@ Build frontend bundle:
 pnpm build
 ```
 
+Download default bundled models (balanced + fast):
+
+```bash
+pnpm model:download
+```
+
+Download a single profile model:
+
+```bash
+pnpm model:download balanced
+pnpm model:download fast
+```
+
 ## Test commands
 
 TypeScript unit tests (Vitest):
@@ -62,6 +75,12 @@ Run all tests:
 pnpm test:all
 ```
 
+Build installer/bundles (auto-downloads missing default models first):
+
+```bash
+pnpm tauri:build
+```
+
 ## Notes
 
 - This repository follows TDD for all new features.
@@ -70,3 +89,4 @@ pnpm test:all
 - Phase 2 currently includes insertion status/history plumbing; OS-native insertion adapters are next.
 - Phase 3 adds hardware profile detection and model path/profile status commands.
 - Phase 4 adds environment health checks, transcript post-processing, and local runtime logs.
+- Model binaries are downloaded via `pnpm model:download` into `src-tauri/resources/models/`.
