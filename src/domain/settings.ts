@@ -7,8 +7,10 @@ export interface AppSettings {
   mode: DictationMode;
   language: "en";
   modelProfile: ModelProfile;
+  modelPath: string | null;
   microphoneId: string | null;
   clipboardFallback: boolean;
+  launchAtStartup: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -16,8 +18,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mode: "push_to_toggle",
   language: "en",
   modelProfile: "balanced",
+  modelPath: null,
   microphoneId: null,
   clipboardFallback: true,
+  launchAtStartup: false,
 };
 
 export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings {
@@ -26,7 +30,9 @@ export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings
     mode: input.mode ?? DEFAULT_SETTINGS.mode,
     language: "en",
     modelProfile: input.modelProfile ?? DEFAULT_SETTINGS.modelProfile,
+    modelPath: input.modelPath ?? DEFAULT_SETTINGS.modelPath,
     microphoneId: input.microphoneId ?? DEFAULT_SETTINGS.microphoneId,
     clipboardFallback: input.clipboardFallback ?? DEFAULT_SETTINGS.clipboardFallback,
+    launchAtStartup: input.launchAtStartup ?? DEFAULT_SETTINGS.launchAtStartup,
   };
 }

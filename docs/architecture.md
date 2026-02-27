@@ -1,4 +1,4 @@
-# Architecture (Phase 0/1/2)
+# Architecture (Phase 0/1/2/3/4)
 
 ## Objectives
 
@@ -33,14 +33,29 @@
    - Current runtime uses stub transcriber for end-to-end command/event wiring.
    - Planned next: invoke real whisper.cpp sidecar process.
 
-5. **InsertionService (Rust)**
+5. **ProfileService (Rust)**
+   - Phase 3: detects hardware tier from logical CPU cores.
+   - Recommends and auto-applies model profile (`fast` or `balanced`).
+   - Exposes model path validation status and profile-based chunking/cadence tuning.
+
+6. **InsertionService (Rust)**
    - Phase 2: fallback-aware insertion status and recent history ring buffer (size 3) are implemented.
    - Current direct/clipboard OS adapters are stubbed for command/event wiring.
    - Planned next: wire per-OS direct insertion adapters.
 
-6. **SettingsService (TS + Rust)**
+7. **SettingsService (TS + Rust)**
    - Phase 2: persists settings to disk and applies runtime mode updates.
+   - Phase 4: includes launch-at-startup persistence flag and microphone selection persistence.
    - Planned next: wire global hotkey registration updates from settings.
+
+8. **EnvironmentHealthService (Rust)**
+   - Phase 4: reports OS/session state and permission guidance for input injection.
+
+9. **PostProcessingService (Rust)**
+   - Phase 4: normalizes transcript punctuation/casing and suppresses duplicate outputs.
+
+10. **RuntimeLogService (Rust)**
+   - Phase 4: writes local runtime logs and exposes commands for reading/clearing recent logs.
 
 ## Dictation state machine
 
@@ -77,8 +92,10 @@ Mode rules:
 - `mode`: `push_to_toggle` | `push_to_talk`
 - `language`: `en`
 - `modelProfile`: `balanced` | `fast`
+- `modelPath`: string | null
 - `microphoneId`: string | null
 - `clipboardFallback`: boolean (default true)
+- `launchAtStartup`: boolean (default false)
 
 ## Test strategy
 
@@ -89,8 +106,11 @@ Mode rules:
   - settings normalization and defaults
 - **Rust tests:** `cargo test` (`pnpm test:rust`)
   - default settings and model/profile invariants
+  - hardware profile detection and model path resolution
   - settings persistence and patching
   - insertion fallback resolution/history truncation
+  - environment/session mapping and transcript post-processing
+  - runtime log append/read/clear behavior
   - adapter and orchestration units as they are added
 
 ## CI command baseline

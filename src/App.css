@@ -88,6 +88,23 @@ select {
   color: #5d6a7c;
 }
 
+.log-box {
+  margin-top: 0.75rem;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #d8dfed;
+  border-radius: 8px;
+  background: #f7f9fd;
+  padding: 0.5rem;
+}
+
+.log-box pre {
+  margin: 0 0 0.35rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.75rem;
+}
+
 .error {
   margin: 0;
   color: #b0302d;

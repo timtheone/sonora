@@ -25,6 +25,20 @@ import {
   updatePhase2Settings,
   type InsertionRecord,
 } from "./services/phase2";
+import {
+  autoSelectHardwareProfile,
+  getHardwareProfileStatus,
+  getModelStatus,
+  setModelPath,
+  type HardwareProfileStatus,
+  type ModelStatus,
+} from "./services/phase3";
+import {
+  clearRuntimeLogs,
+  getEnvironmentHealth,
+  getRuntimeLogs,
+  type EnvironmentHealth,
+} from "./services/phase4";
 
 const FALLBACK_STATE: DictationState = "idle";
 
@@ -42,8 +56,23 @@ function App() {
   const [recentTranscripts, setRecentTranscripts] = useState<string[]>([]);
   const [insertions, setInsertions] = useState<InsertionRecord[]>([]);
   const [hotkey, setHotkey] = useState(DEFAULT_SETTINGS.hotkey);
+  const [modelProfile, setModelProfile] = useState<"fast" | "balanced">(
+    DEFAULT_SETTINGS.modelProfile,
+  );
+  const [modelPath, setModelPathInput] = useState<string>("");
+  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string>("");
+  const [availableMicrophones, setAvailableMicrophones] = useState<
+    Array<{ id: string; label: string }>
+  >([]);
   const [clipboardFallback, setClipboardFallback] = useState(true);
+  const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const [insertInput, setInsertInput] = useState("phase 2 insertion test text");
+  const [hardwareProfile, setHardwareProfile] =
+    useState<HardwareProfileStatus | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
+  const [environmentHealth, setEnvironmentHealth] =
+    useState<EnvironmentHealth | null>(null);
+  const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,17 +87,41 @@ function App() {
       getPhase1Status(),
       getPhase2Settings(),
       getPhase2RecentInsertions(),
+      getHardwareProfileStatus(),
+      getModelStatus(),
+      getEnvironmentHealth(),
+      getRuntimeLogs(30),
     ])
-      .then(([phase1Status, settings, recentInsertions]) => {
+      .then(
+        ([
+          phase1Status,
+          settings,
+          recentInsertions,
+          hardware,
+          profileStatus,
+          envHealth,
+          logs,
+        ]) => {
         setMode(phase1Status.mode);
         setState(phase1Status.state);
         setHotkey(settings.hotkey);
+        setModelProfile(settings.model_profile);
+        setModelPathInput(settings.model_path ?? "");
+        setSelectedMicrophoneId(settings.microphone_id ?? "");
         setClipboardFallback(settings.clipboard_fallback);
+        setLaunchAtStartup(settings.launch_at_startup);
         setInsertions(recentInsertions);
-      })
+        setHardwareProfile(hardware);
+        setModelStatus(profileStatus);
+          setEnvironmentHealth(envHealth);
+          setRuntimeLogs(logs);
+        },
+      )
       .catch((cause) => {
         setError(String(cause));
       });
+
+    refreshMicrophones();
 
     const unlistenTranscript = listen<TranscriptPayload>(
       "dictation:transcript",
@@ -164,11 +217,21 @@ function App() {
       const updated = await updatePhase2Settings({
         hotkey,
         mode,
+        model_profile: modelProfile,
+        model_path: modelPath.trim() ? modelPath.trim() : null,
+        microphone_id: selectedMicrophoneId.trim() ? selectedMicrophoneId : null,
         clipboard_fallback: clipboardFallback,
+        launch_at_startup: launchAtStartup,
       });
       setHotkey(updated.hotkey);
       setClipboardFallback(updated.clipboard_fallback);
       setMode(updated.mode);
+      setModelProfile(updated.model_profile);
+      setModelPathInput(updated.model_path ?? "");
+      setSelectedMicrophoneId(updated.microphone_id ?? "");
+      setLaunchAtStartup(updated.launch_at_startup);
+      const status = await getModelStatus();
+      setModelStatus(status);
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
     } catch (cause) {
@@ -183,6 +246,85 @@ function App() {
       setError(null);
     } catch (cause) {
       setError(String(cause));
+    }
+  }
+
+  async function detectAndApplyProfile() {
+    try {
+      const updatedSettings = await autoSelectHardwareProfile();
+      const [hardware, status] = await Promise.all([
+        getHardwareProfileStatus(),
+        getModelStatus(),
+      ]);
+      setHardwareProfile(hardware);
+      setModelStatus(status);
+      setModelProfile(updatedSettings.model_profile);
+      setModelPathInput(updatedSettings.model_path ?? "");
+      setSettingsSavedAt(new Date().toLocaleTimeString());
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function saveModelPathOnly() {
+    try {
+      const updated = await setModelPath(modelPath.trim() ? modelPath.trim() : null);
+      setModelPathInput(updated.model_path ?? "");
+      const status = await getModelStatus();
+      setModelStatus(status);
+      setSettingsSavedAt(new Date().toLocaleTimeString());
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function refreshPhase4Health() {
+    try {
+      const [envHealth, logs] = await Promise.all([
+        getEnvironmentHealth(),
+        getRuntimeLogs(30),
+      ]);
+      setEnvironmentHealth(envHealth);
+      setRuntimeLogs(logs);
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function clearLogs() {
+    try {
+      await clearRuntimeLogs();
+      setRuntimeLogs([]);
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function refreshMicrophones() {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const microphones = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          id: device.deviceId,
+          label: device.label || `Microphone ${index + 1}`,
+        }));
+      setAvailableMicrophones(microphones);
+      if (microphones.length > 0 && !selectedMicrophoneId) {
+        setSelectedMicrophoneId(microphones[0].id);
+      }
+    } catch {
+      setAvailableMicrophones([]);
     }
   }
 
@@ -226,6 +368,26 @@ function App() {
             <option value="push_to_talk">Push to talk</option>
           </select>
         </label>
+        <label className="field">
+          <span>Model profile</span>
+          <select
+            disabled={!available}
+            value={modelProfile}
+            onChange={(event) => setModelProfile(event.currentTarget.value as "fast" | "balanced")}
+          >
+            <option value="balanced">Balanced (base.en quantized)</option>
+            <option value="fast">Fast (tiny.en quantized)</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Model path override (optional)</span>
+          <input
+            disabled={!available}
+            value={modelPath}
+            onChange={(event) => setModelPathInput(event.currentTarget.value)}
+            placeholder="models/ggml-base.en-q5_1.bin"
+          />
+        </label>
         <label className="field inline">
           <input
             type="checkbox"
@@ -235,14 +397,68 @@ function App() {
           />
           <span>Enable clipboard fallback insertion</span>
         </label>
+        <label className="field inline">
+          <input
+            type="checkbox"
+            disabled={!available}
+            checked={launchAtStartup}
+            onChange={(event) => setLaunchAtStartup(event.currentTarget.checked)}
+          />
+          <span>Launch app at startup (persistence in place)</span>
+        </label>
+        <label className="field">
+          <span>Microphone</span>
+          <select
+            disabled={!available}
+            value={selectedMicrophoneId}
+            onChange={(event) => setSelectedMicrophoneId(event.currentTarget.value)}
+          >
+            <option value="">Default microphone</option>
+            {availableMicrophones.map((mic) => (
+              <option key={mic.id} value={mic.id}>
+                {mic.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="actions">
           <button disabled={!available} onClick={saveSettings}>Save Settings</button>
+          <button disabled={!available} onClick={saveModelPathOnly}>Save Model Path</button>
+          <button disabled={!available} onClick={refreshMicrophones}>Refresh Microphones</button>
         </div>
         <p className="muted">
           {settingsSavedAt
             ? `Settings saved at ${settingsSavedAt}`
             : "No settings saved in this session yet."}
         </p>
+      </section>
+
+      <section className="panel">
+        <h2>Phase 3 Profile + Model Status</h2>
+        {hardwareProfile ? (
+          <ul>
+            <li>Logical cores: {hardwareProfile.logical_cores}</li>
+            <li>Detected tier: {hardwareProfile.hardware_tier}</li>
+            <li>Recommended profile: {hardwareProfile.recommended_profile}</li>
+          </ul>
+        ) : (
+          <p>Hardware profile not loaded yet.</p>
+        )}
+        {modelStatus ? (
+          <ul>
+            <li>Active profile: {modelStatus.profile}</li>
+            <li>Resolved model path: {modelStatus.model_path}</li>
+            <li>Model exists: {modelStatus.model_exists ? "yes" : "no"}</li>
+            <li>
+              Tuning: min chunk {modelStatus.tuning.min_chunk_samples} samples, cadence {modelStatus.tuning.partial_cadence_ms} ms
+            </li>
+          </ul>
+        ) : (
+          <p>Model status not loaded yet.</p>
+        )}
+        <div className="actions">
+          <button disabled={!available} onClick={detectAndApplyProfile}>Auto-select Profile</button>
+        </div>
       </section>
 
       <section className="panel">
@@ -258,6 +474,35 @@ function App() {
         <div className="actions">
           <button disabled={!available} onClick={insertText}>Insert Text</button>
         </div>
+      </section>
+
+      <section className="panel">
+        <h2>Phase 4 Environment + Runtime Logs</h2>
+        {environmentHealth ? (
+          <ul>
+            <li>OS: {environmentHealth.os}</li>
+            <li>Session: {environmentHealth.session_type}</li>
+            <li>Input permission state: {environmentHealth.input_injection_permission}</li>
+            {environmentHealth.notes.map((note, index) => (
+              <li key={`note-${index}`}>{note}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>Environment health not loaded yet.</p>
+        )}
+        <div className="actions">
+          <button disabled={!available} onClick={refreshPhase4Health}>Refresh Health + Logs</button>
+          <button disabled={!available} onClick={clearLogs}>Clear Logs</button>
+        </div>
+        {runtimeLogs.length === 0 ? (
+          <p>No runtime logs yet.</p>
+        ) : (
+          <div className="log-box">
+            {runtimeLogs.map((line, index) => (
+              <pre key={`log-${index}`}>{line}</pre>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="panel">

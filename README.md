@@ -7,7 +7,7 @@ Offline desktop dictation app (Windows, macOS, Linux X11) built with Tauri + Typ
 - Tauri v2
 - React + TypeScript (frontend)
 - Rust (native backend)
-- whisper.cpp sidecar integration (Phase 1 in progress)
+- whisper.cpp sidecar integration scaffold (runtime invocation pending)
 - pnpm (JavaScript package manager)
 
 ## Development
@@ -68,3 +68,5 @@ pnpm test:all
 - Current scope is English-only with `Ctrl/Cmd + Shift + U` default hotkey.
 - Settings are persisted locally via the Rust backend store.
 - Phase 2 currently includes insertion status/history plumbing; OS-native insertion adapters are next.
+- Phase 3 adds hardware profile detection and model path/profile status commands.
+- Phase 4 adds environment health checks, transcript post-processing, and local runtime logs.

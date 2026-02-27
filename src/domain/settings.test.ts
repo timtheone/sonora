@@ -15,6 +15,7 @@ describe("settings", () => {
     ).toMatchObject({
       mode: "push_to_talk",
       modelProfile: "fast",
+      modelPath: DEFAULT_SETTINGS.modelPath,
       hotkey: DEFAULT_SETTINGS.hotkey,
       language: "en",
     });
@@ -22,5 +23,9 @@ describe("settings", () => {
 
   it("falls back to default hotkey for empty value", () => {
     expect(normalizeSettings({ hotkey: " " }).hotkey).toBe(DEFAULT_SETTINGS.hotkey);
+  });
+
+  it("preserves launch-at-startup setting when provided", () => {
+    expect(normalizeSettings({ launchAtStartup: true }).launchAtStartup).toBe(true);
   });
 });

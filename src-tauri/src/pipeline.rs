@@ -1,6 +1,7 @@
 use serde::Serialize;
 
-use crate::config::DictationMode;
+use crate::config::{DictationMode, ModelProfile};
+use crate::profile::{tuning_for_profile, ProfileTuning};
 use crate::transcriber::Transcriber;
 use crate::vad::{has_speech, VadConfig};
 
@@ -16,20 +17,26 @@ pub enum DictationState {
 pub struct PipelineStatus {
     pub mode: DictationMode,
     pub state: DictationState,
+    pub model_profile: ModelProfile,
+    pub tuning: ProfileTuning,
 }
 
 pub struct DictationPipeline<T: Transcriber> {
     mode: DictationMode,
     state: DictationState,
+    model_profile: ModelProfile,
+    tuning: ProfileTuning,
     vad_config: VadConfig,
     transcriber: T,
 }
 
 impl<T: Transcriber> DictationPipeline<T> {
-    pub fn new(mode: DictationMode, transcriber: T) -> Self {
+    pub fn new(mode: DictationMode, model_profile: ModelProfile, transcriber: T) -> Self {
         Self {
             mode,
             state: DictationState::Idle,
+            model_profile,
+            tuning: tuning_for_profile(model_profile),
             vad_config: VadConfig::default(),
             transcriber,
         }
@@ -39,12 +46,19 @@ impl<T: Transcriber> DictationPipeline<T> {
         PipelineStatus {
             mode: self.mode,
             state: self.state,
+            model_profile: self.model_profile,
+            tuning: self.tuning.clone(),
         }
     }
 
     pub fn set_mode(&mut self, mode: DictationMode) {
         self.mode = mode;
         self.state = DictationState::Idle;
+    }
+
+    pub fn set_model_profile(&mut self, model_profile: ModelProfile) {
+        self.model_profile = model_profile;
+        self.tuning = tuning_for_profile(model_profile);
     }
 
     pub fn on_hotkey_down(&mut self) {
@@ -76,6 +90,10 @@ impl<T: Transcriber> DictationPipeline<T> {
             return Ok(None);
         }
 
+        if samples.len() < self.tuning.min_chunk_samples {
+            return Ok(None);
+        }
+
         if !has_speech(samples, &self.vad_config) {
             return Ok(None);
         }
@@ -103,14 +121,22 @@ mod tests {
 
     #[test]
     fn starts_listening_on_hotkey_down() {
-        let mut pipeline = DictationPipeline::new(DictationMode::PushToToggle, StubTranscriber);
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Balanced,
+            StubTranscriber,
+        );
         pipeline.on_hotkey_down();
         assert_eq!(pipeline.status().state, DictationState::Listening);
     }
 
     #[test]
     fn push_to_toggle_stops_with_second_press() {
-        let mut pipeline = DictationPipeline::new(DictationMode::PushToToggle, StubTranscriber);
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Balanced,
+            StubTranscriber,
+        );
         pipeline.on_hotkey_down();
         pipeline.on_hotkey_down();
         assert_eq!(pipeline.status().state, DictationState::Idle);
@@ -118,7 +144,11 @@ mod tests {
 
     #[test]
     fn push_to_talk_stops_on_release() {
-        let mut pipeline = DictationPipeline::new(DictationMode::PushToTalk, StubTranscriber);
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToTalk,
+            ModelProfile::Balanced,
+            StubTranscriber,
+        );
         pipeline.on_hotkey_down();
         pipeline.on_hotkey_up();
         assert_eq!(pipeline.status().state, DictationState::Idle);
@@ -126,7 +156,11 @@ mod tests {
 
     #[test]
     fn silent_chunk_does_not_transcribe() {
-        let mut pipeline = DictationPipeline::new(DictationMode::PushToToggle, StubTranscriber);
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Fast,
+            StubTranscriber,
+        );
         pipeline.on_hotkey_down();
 
         let result = pipeline
@@ -137,7 +171,11 @@ mod tests {
 
     #[test]
     fn speech_chunk_transcribes() {
-        let mut pipeline = DictationPipeline::new(DictationMode::PushToToggle, StubTranscriber);
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Fast,
+            StubTranscriber,
+        );
         pipeline.on_hotkey_down();
 
         let result = pipeline
@@ -146,5 +184,38 @@ mod tests {
 
         assert_eq!(result.as_deref(), Some("phase-1 transcript"));
         assert_eq!(pipeline.status().state, DictationState::Listening);
+    }
+
+    #[test]
+    fn balanced_profile_ignores_short_chunks() {
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Balanced,
+            StubTranscriber,
+        );
+        pipeline.on_hotkey_down();
+
+        let short_chunk = vec![0.2_f32; 1024];
+        let result = pipeline
+            .process_audio_chunk(&short_chunk)
+            .expect("short chunk should be ignored");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn set_model_profile_updates_tuning() {
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Balanced,
+            StubTranscriber,
+        );
+
+        let before = pipeline.status();
+        pipeline.set_model_profile(ModelProfile::Fast);
+        let after = pipeline.status();
+
+        assert_eq!(before.model_profile, ModelProfile::Balanced);
+        assert_eq!(after.model_profile, ModelProfile::Fast);
+        assert!(after.tuning.min_chunk_samples < before.tuning.min_chunk_samples);
     }
 }

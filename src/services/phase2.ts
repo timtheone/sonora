@@ -5,17 +5,21 @@ export interface AppSettings {
   hotkey: string;
   mode: DictationMode;
   language: "en";
-  model_profile: string;
+  model_profile: "fast" | "balanced";
+  model_path: string | null;
   microphone_id: string | null;
   clipboard_fallback: boolean;
+  launch_at_startup: boolean;
 }
 
 export interface AppSettingsPatch {
   hotkey?: string;
   mode?: DictationMode;
-  model_profile?: string;
+  model_profile?: "fast" | "balanced";
+  model_path?: string | null;
   microphone_id?: string | null;
   clipboard_fallback?: boolean;
+  launch_at_startup?: boolean;
 }
 
 export type InsertionStatus = "success" | "fallback" | "failure";

@@ -1,4 +1,4 @@
-use crate::config::{AppSettings, DictationMode};
+use crate::config::{AppSettings, DictationMode, ModelProfile};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -8,9 +8,11 @@ use std::path::{Path, PathBuf};
 pub struct AppSettingsPatch {
     pub hotkey: Option<String>,
     pub mode: Option<DictationMode>,
-    pub model_profile: Option<String>,
+    pub model_profile: Option<ModelProfile>,
+    pub model_path: Option<Option<String>>,
     pub microphone_id: Option<Option<String>>,
     pub clipboard_fallback: Option<bool>,
+    pub launch_at_startup: Option<bool>,
 }
 
 pub fn default_settings_path() -> PathBuf {
@@ -45,11 +47,13 @@ pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettin
         language: settings.language.clone(),
         model_profile: patch
             .model_profile
-            .unwrap_or_else(|| settings.model_profile.clone()),
+            .unwrap_or(settings.model_profile),
+        model_path: patch.model_path.unwrap_or_else(|| settings.model_path.clone()),
         microphone_id: patch
             .microphone_id
             .unwrap_or_else(|| settings.microphone_id.clone()),
         clipboard_fallback: patch.clipboard_fallback.unwrap_or(settings.clipboard_fallback),
+        launch_at_startup: patch.launch_at_startup.unwrap_or(settings.launch_at_startup),
     }
 }
 
@@ -78,18 +82,22 @@ mod tests {
             AppSettingsPatch {
                 hotkey: Some("CtrlOrCmd+Shift+Y".to_string()),
                 mode: Some(DictationMode::PushToTalk),
-                model_profile: None,
+                model_profile: Some(ModelProfile::Fast),
+                model_path: Some(Some("models/custom.bin".to_string())),
                 microphone_id: Some(Some("mic-2".to_string())),
                 clipboard_fallback: Some(false),
+                launch_at_startup: Some(true),
             },
         );
 
         assert_eq!(updated.hotkey, "CtrlOrCmd+Shift+Y");
         assert_eq!(updated.mode, DictationMode::PushToTalk);
         assert_eq!(updated.language, "en");
-        assert_eq!(updated.model_profile, defaults.model_profile);
+        assert_eq!(updated.model_profile, ModelProfile::Fast);
+        assert_eq!(updated.model_path.as_deref(), Some("models/custom.bin"));
         assert_eq!(updated.microphone_id, Some("mic-2".to_string()));
         assert!(!updated.clipboard_fallback);
+        assert!(updated.launch_at_startup);
     }
 
     #[test]
@@ -99,9 +107,11 @@ mod tests {
             hotkey: "CtrlOrCmd+Shift+P".to_string(),
             mode: DictationMode::PushToTalk,
             language: "en".to_string(),
-            model_profile: "fast".to_string(),
+            model_profile: ModelProfile::Fast,
+            model_path: Some("models/ggml-tiny.en-q8_0.bin".to_string()),
             microphone_id: None,
             clipboard_fallback: true,
+            launch_at_startup: false,
         };
 
         save(&path, &settings).expect("settings should be saved");
