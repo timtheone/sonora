@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::ModelProfile;
+use serde::Deserialize;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -33,11 +34,42 @@ pub struct WhisperSidecarConfig {
     pub model_path: PathBuf,
     pub language: String,
     pub threads: usize,
+    pub compute_backend: WhisperComputeBackend,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhisperComputeBackend {
+    Cpu,
+    Cuda,
+}
+
+impl WhisperComputeBackend {
+    fn as_label(self) -> &'static str {
+        match self {
+            WhisperComputeBackend::Cpu => "cpu",
+            WhisperComputeBackend::Cuda => "cuda",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhisperBackendPreference {
+    Auto,
+    Cpu,
+    Cuda,
+}
+
+#[derive(Debug, Deserialize)]
+struct WhisperSidecarMetadata {
+    backend: Option<String>,
+}
+
+const SIDECAR_METADATA_FILE_NAME: &str = "whisper-sidecar.json";
+const BACKEND_ENV_NAME: &str = "SONORA_WHISPER_BACKEND";
 
 impl WhisperSidecarConfig {
     pub fn command_args(&self, audio_file: &Path, output_prefix: &Path) -> Vec<String> {
-        vec![
+        let mut args = vec![
             "-m".to_string(),
             self.model_path.to_string_lossy().to_string(),
             "-f".to_string(),
@@ -46,11 +78,18 @@ impl WhisperSidecarConfig {
             self.language.clone(),
             "-t".to_string(),
             self.threads.to_string(),
+            "-np".to_string(),
             "--no-timestamps".to_string(),
             "-otxt".to_string(),
             "-of".to_string(),
             output_prefix.to_string_lossy().to_string(),
-        ]
+        ];
+
+        if self.compute_backend == WhisperComputeBackend::Cpu {
+            args.push("-ng".to_string());
+        }
+
+        args
     }
 }
 
@@ -138,10 +177,32 @@ impl RuntimeTranscriber {
             RuntimeTranscriber::Unavailable { reason } => {
                 format!("unavailable: {reason}")
             }
-            RuntimeTranscriber::Whisper(config) => format!(
-                "whisper sidecar ({})",
-                config.config.binary_path.to_string_lossy()
-            ),
+            RuntimeTranscriber::Whisper(config) => {
+                format!(
+                    "whisper sidecar ({}, backend {})",
+                    config.config.binary_path.to_string_lossy(),
+                    config.config.compute_backend.as_label()
+                )
+            }
+        }
+    }
+
+    pub fn compute_backend_label(&self) -> String {
+        match self {
+            RuntimeTranscriber::Stub(_) => "stub".to_string(),
+            RuntimeTranscriber::Unavailable { .. } => "unavailable".to_string(),
+            RuntimeTranscriber::Whisper(runtime) => {
+                runtime.config.compute_backend.as_label().to_string()
+            }
+        }
+    }
+
+    pub fn uses_gpu(&self) -> bool {
+        match self {
+            RuntimeTranscriber::Whisper(runtime) => {
+                runtime.config.compute_backend == WhisperComputeBackend::Cuda
+            }
+            _ => false,
         }
     }
 }
@@ -176,11 +237,14 @@ pub fn build_runtime_transcriber(
         };
     };
 
+    let compute_backend = resolve_compute_backend(&binary_path);
+
     RuntimeTranscriber::Whisper(WhisperSidecarTranscriber {
         config: WhisperSidecarConfig {
             binary_path,
             model_path,
             language: language.to_string(),
+            compute_backend,
             threads: recommended_threads(model_profile),
         },
     })
@@ -192,9 +256,62 @@ fn recommended_threads(profile: ModelProfile) -> usize {
         .unwrap_or(4);
 
     match profile {
-        ModelProfile::Fast => logical.clamp(1, 2),
-        ModelProfile::Balanced => logical.clamp(2, 4),
+        ModelProfile::Fast => logical.clamp(2, 6),
+        ModelProfile::Balanced => logical.clamp(4, 8),
     }
+}
+
+fn resolve_compute_backend(binary_path: &Path) -> WhisperComputeBackend {
+    match parse_backend_preference(std::env::var(BACKEND_ENV_NAME).ok().as_deref()) {
+        Some(WhisperBackendPreference::Cpu) => WhisperComputeBackend::Cpu,
+        Some(WhisperBackendPreference::Cuda) => WhisperComputeBackend::Cuda,
+        Some(WhisperBackendPreference::Auto) | None => {
+            if let Some(metadata_backend) = read_metadata_backend(binary_path) {
+                metadata_backend
+            } else if has_nvidia_gpu() {
+                WhisperComputeBackend::Cuda
+            } else {
+                WhisperComputeBackend::Cpu
+            }
+        }
+    }
+}
+
+fn parse_backend_preference(value: Option<&str>) -> Option<WhisperBackendPreference> {
+    let normalized = value?.trim().to_ascii_lowercase();
+
+    match normalized.as_str() {
+        "" => None,
+        "auto" => Some(WhisperBackendPreference::Auto),
+        "cpu" => Some(WhisperBackendPreference::Cpu),
+        "cuda" | "gpu" | "nvidia" => Some(WhisperBackendPreference::Cuda),
+        _ => None,
+    }
+}
+
+fn metadata_path_for_binary(binary_path: &Path) -> Option<PathBuf> {
+    binary_path
+        .parent()
+        .map(|parent| parent.join(SIDECAR_METADATA_FILE_NAME))
+}
+
+fn read_metadata_backend(binary_path: &Path) -> Option<WhisperComputeBackend> {
+    let metadata_path = metadata_path_for_binary(binary_path)?;
+    let raw = fs::read_to_string(metadata_path).ok()?;
+    let parsed = serde_json::from_str::<WhisperSidecarMetadata>(&raw).ok()?;
+    parse_backend_preference(parsed.backend.as_deref()).map(|preference| match preference {
+        WhisperBackendPreference::Cuda => WhisperComputeBackend::Cuda,
+        WhisperBackendPreference::Cpu | WhisperBackendPreference::Auto => {
+            WhisperComputeBackend::Cpu
+        }
+    })
+}
+
+fn has_nvidia_gpu() -> bool {
+    let output = Command::new("nvidia-smi").arg("-L").output();
+    output
+        .map(|result| result.status.success())
+        .unwrap_or(false)
 }
 
 pub fn resolve_binary_candidates(resource_dir: Option<&Path>) -> Vec<PathBuf> {
@@ -312,6 +429,7 @@ mod tests {
             model_path: PathBuf::from("./models/ggml-base.en-q5_1.bin"),
             language: "en".to_string(),
             threads: 2,
+            compute_backend: WhisperComputeBackend::Cpu,
         };
         let args = config.command_args(Path::new("./tmp/chunk.wav"), Path::new("./tmp/out"));
 
@@ -319,9 +437,66 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-f"));
         assert!(args.iter().any(|arg| arg == "-l"));
         assert!(args.iter().any(|arg| arg == "-t"));
+        assert!(args.iter().any(|arg| arg == "-np"));
         assert!(args.iter().any(|arg| arg == "-otxt"));
         assert!(args.iter().any(|arg| arg == "-of"));
         assert!(args.iter().any(|arg| arg == "en"));
+        assert!(args.iter().any(|arg| arg == "-ng"));
+    }
+
+    #[test]
+    fn whisper_command_args_do_not_disable_gpu_for_cuda_backend() {
+        let config = WhisperSidecarConfig {
+            binary_path: PathBuf::from("./bin/whisper"),
+            model_path: PathBuf::from("./models/ggml-base.en-q5_1.bin"),
+            language: "en".to_string(),
+            threads: 6,
+            compute_backend: WhisperComputeBackend::Cuda,
+        };
+
+        let args = config.command_args(Path::new("./tmp/chunk.wav"), Path::new("./tmp/out"));
+        assert!(!args.iter().any(|arg| arg == "-ng"));
+    }
+
+    #[test]
+    fn parses_backend_preference_variants() {
+        assert_eq!(
+            parse_backend_preference(Some("cuda")),
+            Some(WhisperBackendPreference::Cuda)
+        );
+        assert_eq!(
+            parse_backend_preference(Some("NVIDIA")),
+            Some(WhisperBackendPreference::Cuda)
+        );
+        assert_eq!(
+            parse_backend_preference(Some("cpu")),
+            Some(WhisperBackendPreference::Cpu)
+        );
+        assert_eq!(
+            parse_backend_preference(Some("auto")),
+            Some(WhisperBackendPreference::Auto)
+        );
+        assert_eq!(parse_backend_preference(Some("")), None);
+        assert_eq!(parse_backend_preference(Some("unknown")), None);
+    }
+
+    #[test]
+    fn reads_sidecar_metadata_backend_hint() {
+        let token = temporary_token();
+        let dir = std::env::temp_dir().join(format!("sonora-sidecar-meta-{token}"));
+        fs::create_dir_all(&dir).expect("temp metadata directory should be created");
+
+        let binary = dir.join("whisper-cli");
+        fs::write(&binary, "").expect("binary placeholder should be created");
+        let metadata = dir.join(SIDECAR_METADATA_FILE_NAME);
+        fs::write(&metadata, "{\"backend\":\"cuda\"}\n").expect("metadata file should be created");
+
+        let backend = read_metadata_backend(&binary);
+        assert_eq!(backend, Some(WhisperComputeBackend::Cuda));
+
+        let _ = fs::remove_file(metadata);
+        let _ = fs::remove_file(binary);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

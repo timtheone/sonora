@@ -56,6 +56,20 @@ Download/build whisper.cpp sidecar binary for current OS:
 pnpm sidecar:setup
 ```
 
+Build explicitly with NVIDIA CUDA backend:
+
+```bash
+pnpm sidecar:setup:cuda
+```
+
+You can also choose backend manually:
+
+```bash
+pnpm sidecar:setup --backend auto
+pnpm sidecar:setup --backend cpu
+pnpm sidecar:setup --backend cuda
+```
+
 Force a clean re-clone + rebuild of sidecar:
 
 ```bash
@@ -69,6 +83,9 @@ Troubleshooting sidecar setup:
   - macOS: `brew install cmake` and `xcode-select --install`
   - Windows: install CMake + Visual Studio C++ Build Tools
 - Build the sidecar on the same OS as the package target (Windows package expects `whisper-cli.exe`).
+- CUDA backend requires NVIDIA driver + CUDA Toolkit (`nvcc`) in your PATH.
+- Sidecar setup writes backend metadata to `src-tauri/resources/bin/whisper-sidecar.json`; runtime uses it to prefer CPU/CUDA mode.
+- Runtime override: set `SONORA_WHISPER_BACKEND=cpu|cuda|auto` before launching the app.
 
 ## Test commands
 

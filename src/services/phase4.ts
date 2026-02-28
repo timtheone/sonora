@@ -21,6 +21,8 @@ export interface RecoveryCheckpoint {
 export interface TranscriberStatus {
   ready: boolean;
   description: string;
+  compute_backend: string;
+  using_gpu: boolean;
   resolved_binary_path: string | null;
   checked_binary_paths: string[];
   resolved_model_path: string;

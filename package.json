@@ -13,6 +13,7 @@
     "model:download:balanced": "pnpm model:download balanced",
     "model:download:fast": "pnpm model:download fast",
     "sidecar:setup": "node scripts/setup-whisper-sidecar.mjs",
+    "sidecar:setup:cuda": "pnpm sidecar:setup --backend cuda",
     "sidecar:setup:force": "pnpm sidecar:setup --force-clone",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -16,6 +16,7 @@ const outputDir = path.join(projectRoot, "src-tauri", "resources", "bin");
 
 const platform = process.platform;
 const executableName = platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+const metadataFileName = "whisper-sidecar.json";
 
 function missingCommandHelp(command) {
   const base = `Missing required command: '${command}'.`;
@@ -60,14 +61,97 @@ function ensureRequirements() {
   }
 }
 
+function hasCudaToolchain() {
+  const result = spawnSync("nvcc", ["--version"], {
+    stdio: "ignore",
+  });
+  if (result.error && result.error.code === "ENOENT") {
+    return false;
+  }
+  return result.status === 0;
+}
+
+function hasNvidiaDriver() {
+  const result = spawnSync("nvidia-smi", ["-L"], {
+    encoding: "utf8",
+  });
+  if (result.error && result.error.code === "ENOENT") {
+    return false;
+  }
+  return result.status === 0 && Boolean(result.stdout?.trim());
+}
+
+function parseBackend(value) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (normalized === "") {
+    return null;
+  }
+  if (normalized === "auto" || normalized === "cpu" || normalized === "cuda") {
+    return normalized;
+  }
+  throw new Error(`Unsupported backend '${value}'. Use auto, cpu, or cuda.`);
+}
+
+function resolveBuildBackend(requested) {
+  if (requested === "cpu") {
+    return "cpu";
+  }
+
+  if (requested === "cuda") {
+    if (!hasCudaToolchain()) {
+      throw new Error(
+        "CUDA backend requested but 'nvcc' was not found. Install NVIDIA CUDA Toolkit and retry.",
+      );
+    }
+    return "cuda";
+  }
+
+  if (hasCudaToolchain() && hasNvidiaDriver()) {
+    return "cuda";
+  }
+
+  return "cpu";
+}
+
 function parseArgs(argv) {
   const args = argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
-    return { help: true, forceClone: false };
+    return { help: true, forceClone: false, requestedBackend: "auto" };
   }
+
+  let requestedBackend = parseBackend(process.env.SONORA_WHISPER_BACKEND) ?? "auto";
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--backend") {
+      const value = args[i + 1];
+      if (!value) {
+        throw new Error("Missing value for --backend. Use: --backend auto|cpu|cuda");
+      }
+      requestedBackend = parseBackend(value) ?? "auto";
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--backend=")) {
+      requestedBackend = parseBackend(arg.slice("--backend=".length)) ?? "auto";
+      continue;
+    }
+
+    if (arg === "--cuda") {
+      requestedBackend = "cuda";
+      continue;
+    }
+
+    if (arg === "--cpu") {
+      requestedBackend = "cpu";
+      continue;
+    }
+  }
+
   return {
     help: false,
     forceClone: args.includes("--force-clone"),
+    requestedBackend,
   };
 }
 
@@ -77,18 +161,23 @@ function printHelp() {
       "Download and build whisper.cpp sidecar binary for current OS.",
       "",
       "Usage:",
-      "  pnpm sidecar:setup [--force-clone]",
+      "  pnpm sidecar:setup [--force-clone] [--backend auto|cpu|cuda]",
       "",
       "Options:",
       "  --force-clone   Delete cached source and clone fresh",
+      "  --backend       Backend to build (default: auto)",
+      "  --cuda          Shortcut for --backend cuda",
+      "  --cpu           Shortcut for --backend cpu",
       "",
       "Output:",
       `  src-tauri/resources/bin/${executableName}`,
+      `  src-tauri/resources/bin/${metadataFileName}`,
       "",
       "Requirements:",
       "  - git",
       "  - cmake",
       "  - C/C++ compiler toolchain for your OS",
+      "  - NVIDIA CUDA Toolkit (for --backend cuda)",
       "",
     ].join("\n"),
   );
@@ -211,6 +300,18 @@ async function copyRuntimeLibraries() {
   }
 }
 
+async function writeBackendMetadata(backend) {
+  await ensureDir(outputDir);
+  const destination = path.join(outputDir, metadataFileName);
+  const payload = {
+    backend,
+    platform,
+    generated_at: new Date().toISOString(),
+  };
+  await fs.writeFile(destination, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  process.stdout.write(`Wrote sidecar metadata to ${destination}\n`);
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   if (options.help) {
@@ -222,18 +323,30 @@ async function main() {
 
   await prepareSource(options.forceClone);
 
+  const backend = resolveBuildBackend(options.requestedBackend);
+  process.stdout.write(
+    `Selected backend: ${backend} (requested: ${options.requestedBackend})\n`,
+  );
+
   process.stdout.write("Configuring whisper.cpp build...\n");
-  runCommand("cmake", [
+  const cmakeArgs = [
     "-S",
     sourceDir,
     "-B",
     buildDir,
+    "-DCMAKE_BUILD_TYPE=Release",
     "-DBUILD_SHARED_LIBS=OFF",
     "-DWHISPER_BUILD_EXAMPLES=ON",
     "-DWHISPER_BUILD_TESTS=OFF",
     "-DWHISPER_BUILD_SERVER=OFF",
     "-DGGML_BACKEND_DL=OFF",
-  ]);
+  ];
+
+  if (backend === "cuda") {
+    cmakeArgs.push("-DGGML_CUDA=ON");
+  }
+
+  runCommand("cmake", cmakeArgs);
 
   process.stdout.write("Building whisper.cpp sidecar...\n");
   runCommand("cmake", ["--build", buildDir, "--config", "Release"]);
@@ -247,6 +360,7 @@ async function main() {
 
   await copyExecutable(built);
   await copyRuntimeLibraries();
+  await writeBackendMetadata(backend);
 }
 
 main().catch((error) => {

@@ -110,6 +110,8 @@ struct HardwareProfileStatus {
 struct TranscriberStatus {
     ready: bool,
     description: String,
+    compute_backend: String,
+    using_gpu: bool,
     resolved_binary_path: Option<String>,
     checked_binary_paths: Vec<String>,
     resolved_model_path: String,
@@ -289,6 +291,8 @@ fn build_transcriber_status(app: &tauri::AppHandle, settings: &AppSettings) -> T
     TranscriberStatus {
         ready,
         description: runtime.description(),
+        compute_backend: runtime.compute_backend_label(),
+        using_gpu: runtime.uses_gpu(),
         resolved_binary_path: binary_path.map(|path| path.to_string_lossy().to_string()),
         checked_binary_paths,
         resolved_model_path: model_path.to_string_lossy().to_string(),
