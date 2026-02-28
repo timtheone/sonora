@@ -1,5 +1,5 @@
-pub mod config;
 pub mod audio;
+pub mod config;
 pub mod environment;
 pub mod insertion;
 pub mod pipeline;
@@ -24,7 +24,10 @@ use pipeline::{DictationPipeline, PipelineStatus};
 #[cfg(feature = "desktop")]
 use postprocess::{is_duplicate_transcript, normalize_transcript};
 #[cfg(feature = "desktop")]
-use profile::{build_model_status, detect_hardware_tier, recommended_profile_for_tier, HardwareTier, ModelStatus};
+use profile::{
+    build_model_status, detect_hardware_tier, recommended_profile_for_tier, HardwareTier,
+    ModelStatus,
+};
 #[cfg(feature = "desktop")]
 use recovery::RecoveryCheckpoint;
 #[cfg(feature = "desktop")]
@@ -42,7 +45,9 @@ use tauri::Emitter;
 #[cfg(feature = "desktop")]
 use tauri::Manager;
 #[cfg(feature = "desktop")]
-use transcriber::{build_runtime_transcriber, resolve_binary_candidates, resolve_binary_path, RuntimeTranscriber};
+use transcriber::{
+    build_runtime_transcriber, resolve_binary_candidates, resolve_binary_path, RuntimeTranscriber,
+};
 
 #[cfg(feature = "desktop")]
 struct PipelineStore {
@@ -243,6 +248,7 @@ fn build_transcriber_status(app: &tauri::AppHandle, settings: &AppSettings) -> T
 
     let runtime = build_runtime_transcriber(
         &settings.language,
+        settings.model_profile,
         model_path.clone(),
         resource_dir.as_deref(),
     );
@@ -268,6 +274,7 @@ fn apply_runtime_transcriber_from_settings(
     let model_path = profile::resolve_model_path(settings, resource_dir.as_deref());
     let runtime = build_runtime_transcriber(
         &settings.language,
+        settings.model_profile,
         model_path,
         resource_dir.as_deref(),
     );
@@ -486,10 +493,7 @@ fn phase2_insert_text(
         fallback_enabled,
         try_clipboard_fallback(&text),
     );
-    let record = InsertionRecord {
-        text,
-        status,
-    };
+    let record = InsertionRecord { text, status };
 
     let mut records = insertion_state
         .records
@@ -673,7 +677,8 @@ pub fn run() {
         .setup(|app| {
             let settings_state = app.state::<SettingsState>();
             let pipeline_state = app.state::<PipelineStore>();
-            if let Ok(current_settings) = settings_state.settings.lock().map(|value| value.clone()) {
+            if let Ok(current_settings) = settings_state.settings.lock().map(|value| value.clone())
+            {
                 let status = apply_runtime_transcriber_from_settings(
                     &app.handle(),
                     &current_settings,

@@ -56,7 +56,10 @@ pub fn mark_start(checkpoint: &RecoveryCheckpoint, now_unix_ms: u128) -> Recover
     }
 }
 
-pub fn mark_clean_shutdown(checkpoint: &RecoveryCheckpoint, now_unix_ms: u128) -> RecoveryCheckpoint {
+pub fn mark_clean_shutdown(
+    checkpoint: &RecoveryCheckpoint,
+    now_unix_ms: u128,
+) -> RecoveryCheckpoint {
     RecoveryCheckpoint {
         clean_shutdown: true,
         recovery_notice_pending: false,

@@ -8,7 +8,9 @@ pub fn validate_audio_format(sample_rate_hz: u32, channels: u16) -> Result<(), S
         ));
     }
     if channels != CHANNELS {
-        return Err(format!("invalid channel count: expected {CHANNELS}, got {channels}"));
+        return Err(format!(
+            "invalid channel count: expected {CHANNELS}, got {channels}"
+        ));
     }
     Ok(())
 }

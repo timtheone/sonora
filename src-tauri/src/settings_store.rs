@@ -45,15 +45,19 @@ pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettin
             .unwrap_or_else(|| settings.hotkey.clone()),
         mode: patch.mode.unwrap_or(settings.mode),
         language: settings.language.clone(),
-        model_profile: patch
-            .model_profile
-            .unwrap_or(settings.model_profile),
-        model_path: patch.model_path.unwrap_or_else(|| settings.model_path.clone()),
+        model_profile: patch.model_profile.unwrap_or(settings.model_profile),
+        model_path: patch
+            .model_path
+            .unwrap_or_else(|| settings.model_path.clone()),
         microphone_id: patch
             .microphone_id
             .unwrap_or_else(|| settings.microphone_id.clone()),
-        clipboard_fallback: patch.clipboard_fallback.unwrap_or(settings.clipboard_fallback),
-        launch_at_startup: patch.launch_at_startup.unwrap_or(settings.launch_at_startup),
+        clipboard_fallback: patch
+            .clipboard_fallback
+            .unwrap_or(settings.clipboard_fallback),
+        launch_at_startup: patch
+            .launch_at_startup
+            .unwrap_or(settings.launch_at_startup),
     }
 }
 

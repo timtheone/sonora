@@ -53,7 +53,10 @@ mod tests {
 
     #[test]
     fn duplicate_detection_ignores_case() {
-        assert!(is_duplicate_transcript(Some("Hello world."), "hello world."));
+        assert!(is_duplicate_transcript(
+            Some("Hello world."),
+            "hello world."
+        ));
         assert!(!is_duplicate_transcript(Some("Hello world."), "different"));
     }
 }

@@ -4,11 +4,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::config::ModelProfile;
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, samples: &[f32]) -> Result<String, String>;
@@ -28,6 +32,7 @@ pub struct WhisperSidecarConfig {
     pub binary_path: PathBuf,
     pub model_path: PathBuf,
     pub language: String,
+    pub threads: usize,
 }
 
 impl WhisperSidecarConfig {
@@ -39,6 +44,8 @@ impl WhisperSidecarConfig {
             audio_file.to_string_lossy().to_string(),
             "-l".to_string(),
             self.language.clone(),
+            "-t".to_string(),
+            self.threads.to_string(),
             "--no-timestamps".to_string(),
             "-otxt".to_string(),
             "-of".to_string(),
@@ -72,7 +79,7 @@ impl WhisperSidecarTranscriber {
 
         #[cfg(target_os = "windows")]
         {
-            command.creation_flags(CREATE_NO_WINDOW);
+            command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
         }
 
         let output = command.output().map_err(|error| {
@@ -151,6 +158,7 @@ impl Transcriber for RuntimeTranscriber {
 
 pub fn build_runtime_transcriber(
     language: &str,
+    model_profile: ModelProfile,
     model_path: PathBuf,
     resource_dir: Option<&Path>,
 ) -> RuntimeTranscriber {
@@ -173,8 +181,20 @@ pub fn build_runtime_transcriber(
             binary_path,
             model_path,
             language: language.to_string(),
+            threads: recommended_threads(model_profile),
         },
     })
+}
+
+fn recommended_threads(profile: ModelProfile) -> usize {
+    let logical = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4);
+
+    match profile {
+        ModelProfile::Fast => logical.clamp(1, 2),
+        ModelProfile::Balanced => logical.clamp(2, 4),
+    }
 }
 
 pub fn resolve_binary_candidates(resource_dir: Option<&Path>) -> Vec<PathBuf> {
@@ -291,12 +311,14 @@ mod tests {
             binary_path: PathBuf::from("./bin/whisper"),
             model_path: PathBuf::from("./models/ggml-base.en-q5_1.bin"),
             language: "en".to_string(),
+            threads: 2,
         };
         let args = config.command_args(Path::new("./tmp/chunk.wav"), Path::new("./tmp/out"));
 
         assert!(args.iter().any(|arg| arg == "-m"));
         assert!(args.iter().any(|arg| arg == "-f"));
         assert!(args.iter().any(|arg| arg == "-l"));
+        assert!(args.iter().any(|arg| arg == "-t"));
         assert!(args.iter().any(|arg| arg == "-otxt"));
         assert!(args.iter().any(|arg| arg == "-of"));
         assert!(args.iter().any(|arg| arg == "en"));
@@ -306,6 +328,7 @@ mod tests {
     fn resolves_runtime_transcriber_as_unavailable_for_missing_model() {
         let transcriber = build_runtime_transcriber(
             "en",
+            ModelProfile::Balanced,
             PathBuf::from("./missing.bin"),
             Some(Path::new("/tmp/resources")),
         );
