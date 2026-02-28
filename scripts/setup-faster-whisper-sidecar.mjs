@@ -152,17 +152,41 @@ async function ensureVenv(pythonCommand, force) {
 }
 
 async function installDependencies(venvPython) {
+  const versionResult = spawnSync(
+    venvPython,
+    ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+    { encoding: "utf8" },
+  );
+  if (versionResult.status !== 0) {
+    throw new Error(
+      `Failed to detect Python version for faster-whisper worker: ${versionResult.stderr || "unknown error"}`,
+    );
+  }
+
+  const detectedVersion = (versionResult.stdout ?? "").trim();
+  const [majorRaw, minorRaw] = detectedVersion.split(".");
+  const major = Number(majorRaw);
+  const minor = Number(minorRaw);
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) {
+    throw new Error(`Unable to parse Python version '${detectedVersion}'`);
+  }
+
+  const numpyRequirement = major > 3 || (major === 3 && minor >= 13) ? "numpy>=2,<3" : "numpy<2";
+
   process.stdout.write("Installing faster-whisper worker dependencies...\n");
+  process.stdout.write(
+    `Detected Python ${detectedVersion}; using ${numpyRequirement} and PyInstaller>=6.15,<7\n`,
+  );
   runCommand(venvPython, ["-m", "pip", "install", "--upgrade", "pip"]);
   runCommand(venvPython, [
     "-m",
     "pip",
     "install",
-    "numpy<2",
-    "faster-whisper==1.0.3",
+    numpyRequirement,
+    "faster-whisper>=1.0.3",
     "requests",
     "huggingface-hub",
-    "pyinstaller==6.10.0",
+    "pyinstaller>=6.15,<7",
   ]);
 }
 
