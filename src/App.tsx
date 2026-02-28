@@ -404,10 +404,14 @@ function App() {
           : await sendPhase1HotkeyDown();
       setState(listeningStatus.state);
       const minChunkSamples = Math.max(
-        512,
-        listeningStatus.tuning?.min_chunk_samples ?? 2048,
+        8_000,
+        listeningStatus.tuning?.min_chunk_samples ?? 32_000,
       );
-      const maxChunkSamples = minChunkSamples * 2;
+      const maxChunkSamples = minChunkSamples * 3;
+      const partialCadenceMs = Math.max(
+        300,
+        listeningStatus.tuning?.partial_cadence_ms ?? 1_200,
+      );
 
       const mediaConstraints: MediaStreamConstraints = selectedMicrophoneId
         ? { audio: { deviceId: { exact: selectedMicrophoneId } } }
@@ -420,8 +424,9 @@ function App() {
 
       let feeding = false;
       let pendingSamples: number[] = [];
+      let lastFeedAtMs = 0;
       processor.onaudioprocess = async (event) => {
-        if (!processorNodeRef.current || feeding) {
+        if (!processorNodeRef.current) {
           return;
         }
 
@@ -455,7 +460,16 @@ function App() {
         }
 
         pendingSamples.push(...downsampled);
+        if (feeding) {
+          return;
+        }
+
         if (pendingSamples.length < minChunkSamples) {
+          return;
+        }
+
+        const now = performance.now();
+        if (now - lastFeedAtMs < partialCadenceMs) {
           return;
         }
 
@@ -467,6 +481,7 @@ function App() {
         }
 
         feeding = true;
+        lastFeedAtMs = now;
         try {
           const transcript = await feedPhase1Audio(chunk);
           if (transcript) {

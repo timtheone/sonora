@@ -45,12 +45,12 @@ pub fn recommended_profile_for_tier(tier: HardwareTier) -> ModelProfile {
 pub fn tuning_for_profile(profile: ModelProfile) -> ProfileTuning {
     match profile {
         ModelProfile::Fast => ProfileTuning {
-            min_chunk_samples: 1024,
-            partial_cadence_ms: 250,
+            min_chunk_samples: 16_000,
+            partial_cadence_ms: 900,
         },
         ModelProfile::Balanced => ProfileTuning {
-            min_chunk_samples: 2048,
-            partial_cadence_ms: 400,
+            min_chunk_samples: 32_000,
+            partial_cadence_ms: 1_400,
         },
     }
 }
@@ -156,7 +156,10 @@ mod tests {
     #[test]
     fn hardware_tier_mapping_prefers_fast_for_low_spec() {
         assert_eq!(detect_hardware_tier(2), HardwareTier::Low);
-        assert_eq!(recommended_profile_for_tier(HardwareTier::Low), ModelProfile::Fast);
+        assert_eq!(
+            recommended_profile_for_tier(HardwareTier::Low),
+            ModelProfile::Fast
+        );
     }
 
     #[test]

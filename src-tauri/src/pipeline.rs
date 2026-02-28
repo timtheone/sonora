@@ -115,7 +115,7 @@ mod tests {
     use crate::transcriber::StubTranscriber;
 
     fn speech_chunk() -> Vec<f32> {
-        (0..1024)
+        (0..20_000)
             .map(|i| {
                 let angle = i as f32 * 0.1;
                 angle.sin() * 0.2

@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, samples: &[f32]) -> Result<String, String>;
 }
@@ -61,16 +67,21 @@ impl WhisperSidecarTranscriber {
         write_wav_file(&wav_path, samples)?;
 
         let args = self.config.command_args(&wav_path, &output_prefix);
-        let output = Command::new(&self.config.binary_path)
-            .args(args)
-            .output()
-            .map_err(|error| {
-                format!(
-                    "failed to execute whisper sidecar at '{}': {}",
-                    self.config.binary_path.to_string_lossy(),
-                    error
-                )
-            })?;
+        let mut command = Command::new(&self.config.binary_path);
+        command.args(args);
+
+        #[cfg(target_os = "windows")]
+        {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = command.output().map_err(|error| {
+            format!(
+                "failed to execute whisper sidecar at '{}': {}",
+                self.config.binary_path.to_string_lossy(),
+                error
+            )
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
