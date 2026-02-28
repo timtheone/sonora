@@ -4,6 +4,7 @@ import { DEFAULT_SETTINGS } from "../domain/settings";
 import { appendInsertionRecord } from "../domain/insertion-history";
 import {
   cancelPhase1,
+  listPhase1Microphones,
   sendPhase1HotkeyDown,
   sendPhase1HotkeyUp,
   setPhase1Mode,
@@ -88,20 +89,8 @@ export function useAppController() {
   }, [available, mode, state]);
 
   async function refreshMicrophones() {
-    if (!navigator.mediaDevices?.enumerateDevices) {
-      return;
-    }
-
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const microphones = devices
-        .filter((device) => device.kind === "audioinput")
-        .map((device, index) => ({
-          id: device.deviceId,
-          label: device.label || `Microphone ${index + 1}`,
-        }));
+      const microphones = await listPhase1Microphones();
       setAvailableMicrophones(microphones);
       if (microphones.length > 0 && !selectedMicrophoneId) {
         setSelectedMicrophoneId(microphones[0].id);

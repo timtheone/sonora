@@ -1,12 +1,16 @@
-import { memo, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   MicLevelPeakIndicator,
   type MicLevelPeakIndicatorHandle,
 } from "./MicLevelPeakIndicator";
 import { useAppControllerContext } from "../context/AppControllerContext";
-import { feedPhase1Audio } from "../services/phase1";
-import { generateSilenceSamples, generateSpeechLikeSamples } from "../domain/audio-chunk";
-import { useLiveMicCapture } from "../hooks/useLiveMicCapture";
+import {
+  getPhase1LiveCaptureActive,
+  startPhase1LiveCapture,
+  stopPhase1LiveCapture,
+  type MicLevelPayload,
+} from "../services/phase1";
 
 function Phase1ControlsComponent() {
   const {
@@ -22,36 +26,82 @@ function Phase1ControlsComponent() {
   } = useAppControllerContext();
 
   const indicatorRef = useRef<MicLevelPeakIndicatorHandle>(null);
+  const reportErrorRef = useRef(reportError);
+  const [liveMicActive, setLiveMicActive] = useState(false);
 
-  const { liveMicActive, startLiveMic, stopLiveMic } = useLiveMicCapture({
-    available,
-    selectedMicrophoneId,
-    ensureListening: async () => {
-      const current = await syncPhaseStatus();
-      if (current?.state === "listening") {
-        return current;
+  useEffect(() => {
+    reportErrorRef.current = reportError;
+  }, [reportError]);
+
+  useEffect(() => {
+    if (!available) {
+      setLiveMicActive(false);
+      indicatorRef.current?.reset();
+      return;
+    }
+
+    let cancelled = false;
+    let disposeMicLevel: (() => void) | null = null;
+    let disposeLiveMic: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        disposeMicLevel = await listen<MicLevelPayload>("dictation:mic-level", (event) => {
+          indicatorRef.current?.update(event.payload.level, event.payload.peak, event.payload.active);
+        });
+
+        disposeLiveMic = await listen<{ active: boolean }>("dictation:live-mic", (event) => {
+          setLiveMicActive(event.payload.active);
+          if (!event.payload.active) {
+            indicatorRef.current?.reset();
+          }
+        });
+
+        const active = await getPhase1LiveCaptureActive();
+        if (!cancelled) {
+          setLiveMicActive(active);
+          if (!active) {
+            indicatorRef.current?.reset();
+          }
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          reportErrorRef.current(cause);
+        }
       }
-      return onHotkeyDown();
-    },
-    stopListening: () => onCancel(),
-    feedAudioChunk: (samples) => feedPhase1Audio(samples),
-    onMicLevel: (level, peak, active) => {
-      indicatorRef.current?.update(level, peak, active);
-    },
-    onError: reportError,
-  });
+    })();
 
-  async function feedSilence() {
+    return () => {
+      cancelled = true;
+      disposeMicLevel?.();
+      disposeLiveMic?.();
+      indicatorRef.current?.reset();
+    };
+  }, [available]);
+
+  async function startLiveMic() {
     try {
-      await feedPhase1Audio(generateSilenceSamples());
+      const current = await syncPhaseStatus();
+      if (current?.state !== "listening") {
+        const next = await onHotkeyDown();
+        if (!next || next.state !== "listening") {
+          return;
+        }
+      }
+
+      await startPhase1LiveCapture(selectedMicrophoneId.trim() ? selectedMicrophoneId : null);
+      setLiveMicActive(true);
     } catch (cause) {
       reportError(cause);
     }
   }
 
-  async function feedSpeech() {
+  async function stopLiveMic() {
     try {
-      await feedPhase1Audio(generateSpeechLikeSamples());
+      await stopPhase1LiveCapture();
+      await onCancel();
+      setLiveMicActive(false);
+      indicatorRef.current?.reset();
     } catch (cause) {
       reportError(cause);
     }
@@ -86,12 +136,6 @@ function Phase1ControlsComponent() {
         </button>
         <button disabled={!available || !liveMicActive} onClick={stopLiveMic}>
           Stop Live Mic
-        </button>
-        <button disabled={!available} onClick={feedSilence}>
-          Feed Silence Chunk
-        </button>
-        <button disabled={!available} onClick={feedSpeech}>
-          Feed Speech Chunk
         </button>
         <button disabled={!available} onClick={onCancel}>
           Cancel

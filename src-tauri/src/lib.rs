@@ -37,9 +37,17 @@ use serde::Serialize;
 #[cfg(feature = "desktop")]
 use settings_store::AppSettingsPatch;
 #[cfg(feature = "desktop")]
-use std::path::PathBuf;
+use std::collections::VecDeque;
 #[cfg(feature = "desktop")]
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+#[cfg(feature = "desktop")]
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+#[cfg(feature = "desktop")]
+use std::sync::{Arc, Mutex};
+#[cfg(feature = "desktop")]
+use std::thread;
+#[cfg(feature = "desktop")]
+use std::time::{Duration, Instant};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 #[cfg(feature = "desktop")]
@@ -51,22 +59,40 @@ use transcriber::{
 
 #[cfg(feature = "desktop")]
 struct PipelineStore {
-    pipeline: Mutex<DictationPipeline<RuntimeTranscriber>>,
-    last_transcript: Mutex<Option<String>>,
+    pipeline: Arc<Mutex<DictationPipeline<RuntimeTranscriber>>>,
+    last_transcript: Arc<Mutex<Option<String>>>,
+    live_capture: Mutex<Option<LiveCaptureSession>>,
 }
 
 #[cfg(feature = "desktop")]
 impl PipelineStore {
     fn new(mode: DictationMode, model_profile: ModelProfile) -> Self {
         Self {
-            pipeline: Mutex::new(DictationPipeline::new(
+            pipeline: Arc::new(Mutex::new(DictationPipeline::new(
                 mode,
                 model_profile,
                 RuntimeTranscriber::Unavailable {
                     reason: "transcriber not initialized".to_string(),
                 },
-            )),
-            last_transcript: Mutex::new(None),
+            ))),
+            last_transcript: Arc::new(Mutex::new(None)),
+            live_capture: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+struct LiveCaptureSession {
+    stop_tx: Sender<()>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "desktop")]
+impl LiveCaptureSession {
+    fn stop(mut self) {
+        let _ = self.stop_tx.send(());
+        if let Some(handle) = self.worker.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -144,6 +170,12 @@ impl RecoveryState {
 #[derive(Clone, Serialize)]
 struct TranscriptPayload {
     text: String,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Clone, Serialize)]
+struct LiveMicPayload {
+    active: bool,
 }
 
 #[cfg(feature = "desktop")]
@@ -525,6 +557,378 @@ fn try_clipboard_fallback(_text: &str) -> Result<(), String> {
 }
 
 #[cfg(feature = "desktop")]
+fn emit_live_mic_state(app: &tauri::AppHandle, active: bool) {
+    let _ = app.emit("dictation:live-mic", LiveMicPayload { active });
+}
+
+#[cfg(feature = "desktop")]
+fn select_fresh_transcript(
+    last_transcript: &mut Option<String>,
+    raw_transcript: Option<String>,
+) -> Option<String> {
+    let normalized = raw_transcript.map(|value| normalize_transcript(&value));
+    normalized.and_then(|value| {
+        if value.is_empty() || is_duplicate_transcript(last_transcript.as_deref(), &value) {
+            None
+        } else {
+            *last_transcript = Some(value.clone());
+            Some(value)
+        }
+    })
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LiveCaptureChunkPlan {
+    next_chunk_size: usize,
+    max_chunk_samples: usize,
+}
+
+#[cfg(feature = "desktop")]
+fn plan_live_capture_chunk(
+    status: &PipelineStatus,
+    pending_samples: usize,
+    elapsed_since_last_feed: Duration,
+) -> Option<LiveCaptureChunkPlan> {
+    if status.state != pipeline::DictationState::Listening {
+        return None;
+    }
+
+    let min_chunk_samples = status.tuning.min_chunk_samples.max(8_000);
+    if pending_samples < min_chunk_samples {
+        return None;
+    }
+
+    let cadence = Duration::from_millis(status.tuning.partial_cadence_ms.max(300));
+    if elapsed_since_last_feed < cadence {
+        return None;
+    }
+
+    let max_chunk_samples = min_chunk_samples.saturating_mul(3);
+    Some(LiveCaptureChunkPlan {
+        next_chunk_size: pending_samples.min(max_chunk_samples),
+        max_chunk_samples,
+    })
+}
+
+#[cfg(feature = "desktop")]
+fn trim_pending_backlog(pending_samples: &mut VecDeque<f32>, max_chunk_samples: usize) {
+    while pending_samples.len() > max_chunk_samples.saturating_mul(5) {
+        let _ = pending_samples.pop_front();
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn emit_transcript_if_fresh(
+    app: &tauri::AppHandle,
+    logs_path: &Path,
+    last_transcript: &Arc<Mutex<Option<String>>>,
+    raw_transcript: Option<String>,
+) -> Result<Option<String>, String> {
+    let mut last = last_transcript
+        .lock()
+        .map_err(|_| "failed to acquire transcript state".to_string())?;
+    let transcript = select_fresh_transcript(&mut last, raw_transcript);
+
+    if let Some(text) = &transcript {
+        app.emit(
+            "dictation:transcript",
+            TranscriptPayload { text: text.clone() },
+        )
+        .map_err(|error| error.to_string())?;
+
+        let _ = log_store::append(
+            logs_path,
+            "info",
+            "transcript.emit",
+            &format!("emitted transcript length={}", text.len()),
+        );
+    }
+
+    Ok(transcript)
+}
+
+#[cfg(feature = "desktop")]
+fn run_live_capture_worker(
+    app: tauri::AppHandle,
+    pipeline: Arc<Mutex<DictationPipeline<RuntimeTranscriber>>>,
+    last_transcript: Arc<Mutex<Option<String>>>,
+    logs_path: PathBuf,
+    source_sample_rate_hz: u32,
+    frame_rx: Receiver<Vec<f32>>,
+    stop_rx: Receiver<()>,
+) {
+    let mut pending_samples = VecDeque::<f32>::new();
+    let mut last_feed_at = Instant::now() - Duration::from_secs(8);
+    let mut last_meter_emit_at = Instant::now() - Duration::from_secs(1);
+    let mut mic_level = 0f32;
+    let mut mic_peak = 0f32;
+
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        let frame = match frame_rx.recv_timeout(Duration::from_millis(60)) {
+            Ok(samples) => samples,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+
+        let measured = audio::measure_mic_level(&frame, mic_level, mic_peak);
+        mic_level = measured.level;
+        mic_peak = measured.peak;
+        if last_meter_emit_at.elapsed() >= Duration::from_millis(90) {
+            let _ = app.emit("dictation:mic-level", measured);
+            last_meter_emit_at = Instant::now();
+        }
+
+        let downsampled = audio::downsample_to_16k(&frame, source_sample_rate_hz);
+        if downsampled.is_empty() {
+            continue;
+        }
+        pending_samples.extend(downsampled);
+
+        let status = match pipeline.lock() {
+            Ok(locked) => locked.status(),
+            Err(_) => {
+                let _ = log_store::append(
+                    &logs_path,
+                    "error",
+                    "mic.capture",
+                    "failed to acquire pipeline state",
+                );
+                break;
+            }
+        };
+
+        if status.state != pipeline::DictationState::Listening {
+            pending_samples.clear();
+            continue;
+        }
+
+        let Some(chunk_plan) =
+            plan_live_capture_chunk(&status, pending_samples.len(), last_feed_at.elapsed())
+        else {
+            continue;
+        };
+
+        let mut chunk = Vec::<f32>::with_capacity(chunk_plan.next_chunk_size);
+        for _ in 0..chunk_plan.next_chunk_size {
+            if let Some(sample) = pending_samples.pop_front() {
+                chunk.push(sample);
+            }
+        }
+
+        trim_pending_backlog(&mut pending_samples, chunk_plan.max_chunk_samples);
+
+        last_feed_at = Instant::now();
+
+        let raw_transcript = match pipeline.lock() {
+            Ok(mut locked) => match locked.process_audio_chunk(&chunk) {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+                    continue;
+                }
+            },
+            Err(_) => {
+                let _ = log_store::append(
+                    &logs_path,
+                    "error",
+                    "mic.capture",
+                    "failed to lock pipeline for transcription",
+                );
+                break;
+            }
+        };
+
+        if let Err(error) =
+            emit_transcript_if_fresh(&app, &logs_path, &last_transcript, raw_transcript)
+        {
+            let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+        }
+    }
+
+    let _ = app.emit(
+        "dictation:mic-level",
+        audio::MicLevel {
+            level: 0.0,
+            peak: 0.0,
+            active: false,
+        },
+    );
+}
+
+#[cfg(feature = "desktop")]
+fn run_live_capture_session(
+    app: tauri::AppHandle,
+    pipeline: Arc<Mutex<DictationPipeline<RuntimeTranscriber>>>,
+    last_transcript: Arc<Mutex<Option<String>>>,
+    logs_path: PathBuf,
+    microphone_id: Option<String>,
+    stop_rx: Receiver<()>,
+) {
+    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<f32>>(24);
+    let input_stream = match audio::build_live_input_stream(microphone_id.as_deref(), frame_tx) {
+        Ok(stream) => stream,
+        Err(error) => {
+            let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+            emit_live_mic_state(&app, false);
+            return;
+        }
+    };
+
+    run_live_capture_worker(
+        app,
+        pipeline,
+        last_transcript,
+        logs_path,
+        input_stream.sample_rate_hz,
+        frame_rx,
+        stop_rx,
+    );
+}
+
+#[cfg(feature = "desktop")]
+fn reap_finished_live_capture(store: &tauri::State<'_, PipelineStore>) {
+    let finished = {
+        let mut active_capture = match store.live_capture.lock() {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+
+        let is_finished = active_capture
+            .as_ref()
+            .and_then(|session| session.worker.as_ref())
+            .map(thread::JoinHandle::is_finished)
+            .unwrap_or(false);
+
+        if is_finished {
+            active_capture.take()
+        } else {
+            None
+        }
+    };
+
+    if let Some(session) = finished {
+        session.stop();
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn stop_live_capture_internal(
+    app: &tauri::AppHandle,
+    store: &tauri::State<'_, PipelineStore>,
+) -> Result<bool, String> {
+    let session = {
+        let mut active_capture = store
+            .live_capture
+            .lock()
+            .map_err(|_| "failed to acquire live capture state".to_string())?;
+        active_capture.take()
+    };
+
+    if let Some(session) = session {
+        session.stop();
+        emit_live_mic_state(app, false);
+        Ok(true)
+    } else {
+        emit_live_mic_state(app, false);
+        Ok(false)
+    }
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn phase1_list_microphones() -> Result<Vec<audio::InputMicrophone>, String> {
+    audio::list_input_microphones()
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn phase1_get_live_capture_active(store: tauri::State<'_, PipelineStore>) -> Result<bool, String> {
+    reap_finished_live_capture(&store);
+
+    let active_capture = store
+        .live_capture
+        .lock()
+        .map_err(|_| "failed to acquire live capture state".to_string())?;
+    Ok(active_capture.is_some())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn phase1_start_live_capture(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, PipelineStore>,
+    logs: tauri::State<'_, RuntimeLogState>,
+    microphone_id: Option<String>,
+) -> Result<bool, String> {
+    reap_finished_live_capture(&store);
+
+    {
+        let active_capture = store
+            .live_capture
+            .lock()
+            .map_err(|_| "failed to acquire live capture state".to_string())?;
+        if active_capture.is_some() {
+            emit_live_mic_state(&app, true);
+            return Ok(true);
+        }
+    }
+
+    let pipeline = Arc::clone(&store.pipeline);
+    let last_transcript = Arc::clone(&store.last_transcript);
+    let logs_path = logs.path.clone();
+    let app_for_worker = app.clone();
+    let selected_microphone = microphone_id
+        .map(|value| value.trim().to_string())
+        .and_then(|value| if value.is_empty() { None } else { Some(value) });
+
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let worker = thread::spawn(move || {
+        run_live_capture_session(
+            app_for_worker,
+            pipeline,
+            last_transcript,
+            logs_path,
+            selected_microphone,
+            stop_rx,
+        );
+    });
+
+    {
+        let mut active_capture = store
+            .live_capture
+            .lock()
+            .map_err(|_| "failed to acquire live capture state".to_string())?;
+        *active_capture = Some(LiveCaptureSession {
+            stop_tx,
+            worker: Some(worker),
+        });
+    }
+
+    emit_live_mic_state(&app, true);
+    let _ = log_store::append(&logs.path, "info", "mic.capture", "live capture started");
+    Ok(true)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn phase1_stop_live_capture(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, PipelineStore>,
+    logs: tauri::State<'_, RuntimeLogState>,
+) -> Result<bool, String> {
+    let stopped = stop_live_capture_internal(&app, &store)?;
+    if stopped {
+        let _ = log_store::append(&logs.path, "info", "mic.capture", "live capture stopped");
+    }
+    Ok(stopped)
+}
+
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn phase1_get_status(store: tauri::State<'_, PipelineStore>) -> Result<PipelineStatus, String> {
     let pipeline = store
@@ -607,40 +1011,94 @@ fn phase1_feed_audio(
         .pipeline
         .lock()
         .map_err(|_| "failed to acquire pipeline state".to_string())?;
-
     let raw_transcript = pipeline.process_audio_chunk(&samples)?;
-    let normalized = raw_transcript.map(|value| normalize_transcript(&value));
+    drop(pipeline);
 
-    let mut last_transcript = store
-        .last_transcript
-        .lock()
-        .map_err(|_| "failed to acquire transcript state".to_string())?;
+    emit_transcript_if_fresh(&app, &logs.path, &store.last_transcript, raw_transcript)
+}
 
-    let transcript = normalized.and_then(|value| {
-        if value.is_empty() || is_duplicate_transcript(last_transcript.as_deref(), &value) {
-            None
-        } else {
-            *last_transcript = Some(value.clone());
-            Some(value)
+#[cfg(all(test, feature = "desktop"))]
+mod tests {
+    use super::*;
+    use crate::config::{DictationMode, ModelProfile};
+    use crate::pipeline::DictationState;
+    use crate::profile::ProfileTuning;
+
+    fn pipeline_status(
+        state: DictationState,
+        min_chunk_samples: usize,
+        partial_cadence_ms: u64,
+    ) -> PipelineStatus {
+        PipelineStatus {
+            mode: DictationMode::PushToToggle,
+            state,
+            model_profile: ModelProfile::Balanced,
+            tuning: ProfileTuning {
+                min_chunk_samples,
+                partial_cadence_ms,
+            },
         }
-    });
-
-    if let Some(text) = &transcript {
-        app.emit(
-            "dictation:transcript",
-            TranscriptPayload { text: text.clone() },
-        )
-        .map_err(|error| error.to_string())?;
-
-        let _ = log_store::append(
-            &logs.path,
-            "info",
-            "transcript.emit",
-            &format!("emitted transcript length={}", text.len()),
-        );
     }
 
-    Ok(transcript)
+    #[test]
+    fn selects_fresh_transcript_once() {
+        let mut last = None;
+
+        let first = select_fresh_transcript(&mut last, Some("  hello   world  ".to_string()));
+        assert_eq!(first.as_deref(), Some("Hello world."));
+        assert_eq!(last.as_deref(), Some("Hello world."));
+
+        let duplicate = select_fresh_transcript(&mut last, Some("hello world.".to_string()));
+        assert!(duplicate.is_none());
+
+        let empty = select_fresh_transcript(&mut last, Some("   ".to_string()));
+        assert!(empty.is_none());
+
+        let absent = select_fresh_transcript(&mut last, None);
+        assert!(absent.is_none());
+    }
+
+    #[test]
+    fn chunk_plan_requires_listening_state() {
+        let status = pipeline_status(DictationState::Idle, 32_000, 1_400);
+        let plan = plan_live_capture_chunk(&status, 64_000, Duration::from_secs(3));
+        assert!(plan.is_none());
+    }
+
+    #[test]
+    fn chunk_plan_respects_minimum_and_cadence() {
+        let status = pipeline_status(DictationState::Listening, 32_000, 1_400);
+
+        let too_small = plan_live_capture_chunk(&status, 31_999, Duration::from_secs(3));
+        assert!(too_small.is_none());
+
+        let too_soon = plan_live_capture_chunk(&status, 32_000, Duration::from_millis(1_000));
+        assert!(too_soon.is_none());
+
+        let ready = plan_live_capture_chunk(&status, 80_000, Duration::from_millis(1_600))
+            .expect("chunk should be planned");
+        assert_eq!(ready.max_chunk_samples, 96_000);
+        assert_eq!(ready.next_chunk_size, 80_000);
+    }
+
+    #[test]
+    fn chunk_plan_caps_chunk_size_by_maximum() {
+        let status = pipeline_status(DictationState::Listening, 32_000, 1_400);
+        let plan = plan_live_capture_chunk(&status, 150_000, Duration::from_secs(2))
+            .expect("chunk should be planned");
+        assert_eq!(plan.max_chunk_samples, 96_000);
+        assert_eq!(plan.next_chunk_size, 96_000);
+    }
+
+    #[test]
+    fn trims_pending_backlog_to_bounded_limit() {
+        let mut pending = (0..80).map(|value| value as f32).collect::<VecDeque<_>>();
+        trim_pending_backlog(&mut pending, 10);
+
+        assert_eq!(pending.len(), 50);
+        assert_eq!(pending.front().copied(), Some(30.0));
+        assert_eq!(pending.back().copied(), Some(79.0));
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -712,6 +1170,9 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 let recovery = window.app_handle().state::<RecoveryState>();
                 let _ = mark_clean_shutdown_state(&recovery);
+
+                let pipeline = window.app_handle().state::<PipelineStore>();
+                let _ = stop_live_capture_internal(&window.app_handle(), &pipeline);
             }
         })
         .plugin(tauri_plugin_opener::init())
@@ -723,6 +1184,10 @@ pub fn run() {
             phase1_hotkey_down,
             phase1_hotkey_up,
             phase1_cancel,
+            phase1_list_microphones,
+            phase1_get_live_capture_active,
+            phase1_start_live_capture,
+            phase1_stop_live_capture,
             phase1_feed_audio,
             phase2_get_settings,
             phase2_update_settings,
