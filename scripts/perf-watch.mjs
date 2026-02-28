@@ -82,10 +82,8 @@ function formatRow(row, widths) {
 }
 
 function renderTable(state) {
-  const rows = state.recentChunkIds
-    .map((chunkId) => state.chunksById.get(chunkId))
-    .filter(Boolean)
-    .sort((a, b) => b.chunk_id - a.chunk_id)
+  const rows = [...state.chunksById.values()]
+    .sort((a, b) => b._seq - a._seq)
     .slice(0, 16)
     .map((chunk) => {
       const emitUi = state.uiByChunk.get(chunk.chunk_id) ?? null;
@@ -117,10 +115,15 @@ function renderTable(state) {
     text: 4,
   };
 
-  const inferValues = [...state.chunksById.values()]
+  const statsWindow = [...state.chunksById.values()]
+    .sort((a, b) => b._seq - a._seq)
+    .slice(0, 120)
+    .filter((chunk) => chunk.inference_ms > 0 || chunk.emitted_transcript);
+
+  const inferValues = statsWindow
     .map((chunk) => chunk.inference_ms)
     .filter((value) => value > 0);
-  const totalValues = [...state.chunksById.values()].map((chunk) => {
+  const totalValues = statsWindow.map((chunk) => {
     const emitUi = state.uiByChunk.get(chunk.chunk_id) ?? 0;
     return chunk.total_worker_ms + emitUi;
   });
@@ -130,7 +133,7 @@ function renderTable(state) {
   const p50Total = percentile(totalValues, 50);
   const p95Total = percentile(totalValues, 95);
 
-  console.clear();
+  process.stdout.write("\x1Bc");
   process.stdout.write(`Sonora Perf Watch\n`);
   process.stdout.write(`Log: ${state.logPath}\n`);
   process.stdout.write(
@@ -192,16 +195,16 @@ function handleEntry(entry, state) {
       if (typeof parsed.chunk_id !== "number") {
         return false;
       }
+      state.seq += 1;
+      parsed._seq = state.seq;
       state.chunksById.set(parsed.chunk_id, parsed);
-      state.recentChunkIds = state.recentChunkIds.filter((value) => value !== parsed.chunk_id);
-      state.recentChunkIds.push(parsed.chunk_id);
-      if (state.recentChunkIds.length > 200) {
-        const overflow = state.recentChunkIds.splice(0, state.recentChunkIds.length - 200);
-        for (const chunkId of overflow) {
-          if (!state.recentChunkIds.includes(chunkId)) {
-            state.chunksById.delete(chunkId);
-            state.uiByChunk.delete(chunkId);
-          }
+      if (state.chunksById.size > 400) {
+        const oldest = [...state.chunksById.values()]
+          .sort((a, b) => a._seq - b._seq)
+          .slice(0, state.chunksById.size - 400);
+        for (const chunk of oldest) {
+          state.chunksById.delete(chunk.chunk_id);
+          state.uiByChunk.delete(chunk.chunk_id);
         }
       }
       return true;
@@ -232,13 +235,21 @@ async function run() {
     logPath,
     offset: 0,
     tailRemainder: "",
+    skipFirstPartialLine: false,
+    seq: 0,
     chunksById: new Map(),
     uiByChunk: new Map(),
-    recentChunkIds: [],
   };
 
   process.stdout.write(`Watching ${logPath}\n`);
   process.stdout.write("Start the app with: pnpm tauri:dev:profiling\n");
+
+  if (existsSync(logPath)) {
+    const stat = await fs.stat(logPath);
+    const tailBytes = 512 * 1024;
+    state.offset = Math.max(0, stat.size - tailBytes);
+    state.skipFirstPartialLine = state.offset > 0;
+  }
 
   const poll = async () => {
     if (!existsSync(logPath)) {
@@ -264,6 +275,10 @@ async function run() {
     const chunkText = state.tailRemainder + buffer.toString("utf8");
     const lines = chunkText.split(/\r?\n/);
     state.tailRemainder = lines.pop() ?? "";
+    if (state.skipFirstPartialLine) {
+      lines.shift();
+      state.skipFirstPartialLine = false;
+    }
 
     let changed = false;
     for (const line of lines) {
@@ -277,6 +292,8 @@ async function run() {
       renderTable(state);
     }
   };
+
+  await poll();
 
   setInterval(() => {
     poll().catch((error) => {
