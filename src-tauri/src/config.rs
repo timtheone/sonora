@@ -29,7 +29,7 @@ pub struct AppSettings {
 }
 
 fn default_mic_sensitivity_percent() -> u16 {
-    140
+    170
 }
 
 impl Default for AppSettings {
@@ -63,7 +63,7 @@ mod tests {
         assert!(settings.clipboard_fallback);
         assert!(!settings.launch_at_startup);
         assert!(settings.microphone_id.is_none());
-        assert_eq!(settings.mic_sensitivity_percent, 140);
+        assert_eq!(settings.mic_sensitivity_percent, 170);
     }
 
     #[test]
@@ -81,6 +81,6 @@ mod tests {
 
         let parsed: AppSettings =
             serde_json::from_str(json).expect("older settings payload should deserialize");
-        assert_eq!(parsed.mic_sensitivity_percent, 140);
+        assert_eq!(parsed.mic_sensitivity_percent, 170);
     }
 }

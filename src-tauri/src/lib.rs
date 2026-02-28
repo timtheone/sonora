@@ -635,6 +635,17 @@ fn apply_mic_gain(samples: &mut [f32], gain: f32) {
 }
 
 #[cfg(feature = "desktop")]
+const FRAME_RECV_TIMEOUT_MS: u64 = 60;
+
+#[cfg(feature = "desktop")]
+const METER_EMIT_INTERVAL_MS: u64 = 33;
+
+#[cfg(feature = "desktop")]
+fn should_emit_meter_update(elapsed: Duration) -> bool {
+    elapsed >= Duration::from_millis(METER_EMIT_INTERVAL_MS)
+}
+
+#[cfg(feature = "desktop")]
 fn emit_transcript_if_fresh(
     app: &tauri::AppHandle,
     logs_path: &Path,
@@ -665,42 +676,23 @@ fn emit_transcript_if_fresh(
 }
 
 #[cfg(feature = "desktop")]
-fn run_live_capture_worker(
+fn run_transcription_worker(
     app: tauri::AppHandle,
     pipeline: Arc<Mutex<DictationPipeline<RuntimeTranscriber>>>,
     last_transcript: Arc<Mutex<Option<String>>>,
     logs_path: PathBuf,
     source_sample_rate_hz: u32,
-    mic_gain: f32,
     frame_rx: Receiver<Vec<f32>>,
-    stop_rx: Receiver<()>,
 ) {
     let mut pending_samples = VecDeque::<f32>::new();
     let mut last_feed_at = Instant::now() - Duration::from_secs(8);
-    let mut last_meter_emit_at = Instant::now() - Duration::from_secs(1);
-    let mut mic_level = 0f32;
-    let mut mic_peak = 0f32;
 
     loop {
-        if stop_rx.try_recv().is_ok() {
-            break;
-        }
-
-        let mut frame = match frame_rx.recv_timeout(Duration::from_millis(60)) {
+        let frame = match frame_rx.recv_timeout(Duration::from_millis(FRAME_RECV_TIMEOUT_MS)) {
             Ok(samples) => samples,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
-
-        apply_mic_gain(&mut frame, mic_gain);
-
-        let measured = audio::measure_mic_level(&frame, mic_level, mic_peak);
-        mic_level = measured.level;
-        mic_peak = measured.peak;
-        if last_meter_emit_at.elapsed() >= Duration::from_millis(90) {
-            let _ = app.emit("dictation:mic-level", measured);
-            last_meter_emit_at = Instant::now();
-        }
 
         let downsampled = audio::downsample_to_16k(&frame, source_sample_rate_hz);
         if downsampled.is_empty() {
@@ -768,15 +760,6 @@ fn run_live_capture_worker(
             let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
         }
     }
-
-    let _ = app.emit(
-        "dictation:mic-level",
-        audio::MicLevel {
-            level: 0.0,
-            peak: 0.0,
-            active: false,
-        },
-    );
 }
 
 #[cfg(feature = "desktop")]
@@ -789,8 +772,8 @@ fn run_live_capture_session(
     mic_sensitivity_percent: u16,
     stop_rx: Receiver<()>,
 ) {
-    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<f32>>(24);
-    let input_stream = match audio::build_live_input_stream(microphone_id.as_deref(), frame_tx) {
+    let (capture_tx, capture_rx) = mpsc::sync_channel::<Vec<f32>>(48);
+    let input_stream = match audio::build_live_input_stream(microphone_id.as_deref(), capture_tx) {
         Ok(stream) => stream,
         Err(error) => {
             let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
@@ -799,15 +782,65 @@ fn run_live_capture_session(
         }
     };
 
-    run_live_capture_worker(
-        app,
-        pipeline,
-        last_transcript,
-        logs_path,
-        input_stream.sample_rate_hz,
-        mic_sensitivity_gain(mic_sensitivity_percent),
-        frame_rx,
-        stop_rx,
+    let (transcribe_tx, transcribe_rx) = mpsc::sync_channel::<Vec<f32>>(24);
+    let app_for_transcription = app.clone();
+    let pipeline_for_transcription = Arc::clone(&pipeline);
+    let transcripts_for_transcription = Arc::clone(&last_transcript);
+    let logs_for_transcription = logs_path.clone();
+    let source_sample_rate_hz = input_stream.sample_rate_hz;
+
+    let transcription_worker = thread::spawn(move || {
+        run_transcription_worker(
+            app_for_transcription,
+            pipeline_for_transcription,
+            transcripts_for_transcription,
+            logs_for_transcription,
+            source_sample_rate_hz,
+            transcribe_rx,
+        );
+    });
+
+    let mic_gain = mic_sensitivity_gain(mic_sensitivity_percent);
+    let mut last_meter_emit_at = Instant::now() - Duration::from_secs(1);
+    let mut mic_level = 0f32;
+    let mut mic_peak = 0f32;
+
+    loop {
+        if stop_rx.try_recv().is_ok() {
+            break;
+        }
+
+        let mut frame = match capture_rx.recv_timeout(Duration::from_millis(FRAME_RECV_TIMEOUT_MS))
+        {
+            Ok(samples) => samples,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+
+        apply_mic_gain(&mut frame, mic_gain);
+
+        let measured = audio::measure_mic_level(&frame, mic_level, mic_peak);
+        mic_level = measured.level;
+        mic_peak = measured.peak;
+
+        if should_emit_meter_update(last_meter_emit_at.elapsed()) {
+            let _ = app.emit("dictation:mic-level", measured);
+            last_meter_emit_at = Instant::now();
+        }
+
+        let _ = transcribe_tx.try_send(frame);
+    }
+
+    drop(transcribe_tx);
+    let _ = transcription_worker.join();
+
+    let _ = app.emit(
+        "dictation:mic-level",
+        audio::MicLevel {
+            level: 0.0,
+            peak: 0.0,
+            active: false,
+        },
     );
 }
 
@@ -1143,6 +1176,13 @@ mod tests {
         assert_eq!(samples[0], 0.2);
         assert_eq!(samples[1], -0.6);
         assert_eq!(samples[2], 1.0);
+    }
+
+    #[test]
+    fn meter_emit_interval_matches_smooth_ui_target() {
+        assert!(!should_emit_meter_update(Duration::from_millis(20)));
+        assert!(should_emit_meter_update(Duration::from_millis(33)));
+        assert!(should_emit_meter_update(Duration::from_millis(45)));
     }
 }
 

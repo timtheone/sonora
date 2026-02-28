@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelProfile: "balanced",
   modelPath: null,
   microphoneId: null,
-  micSensitivityPercent: 140,
+  micSensitivityPercent: 170,
   clipboardFallback: true,
   launchAtStartup: false,
 };
