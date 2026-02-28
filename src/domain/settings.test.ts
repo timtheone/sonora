@@ -28,4 +28,10 @@ describe("settings", () => {
   it("preserves launch-at-startup setting when provided", () => {
     expect(normalizeSettings({ launchAtStartup: true }).launchAtStartup).toBe(true);
   });
+
+  it("clamps microphone sensitivity into supported range", () => {
+    expect(normalizeSettings({ micSensitivityPercent: 20 }).micSensitivityPercent).toBe(50);
+    expect(normalizeSettings({ micSensitivityPercent: 190 }).micSensitivityPercent).toBe(190);
+    expect(normalizeSettings({ micSensitivityPercent: 500 }).micSensitivityPercent).toBe(300);
+  });
 });

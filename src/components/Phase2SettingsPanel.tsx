@@ -10,6 +10,7 @@ function Phase2SettingsPanelComponent() {
     modelProfile,
     modelPath,
     selectedMicrophoneId,
+    micSensitivityPercent,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -19,6 +20,7 @@ function Phase2SettingsPanelComponent() {
     setModelProfile,
     setModelPathInput,
     setSelectedMicrophoneId,
+    setMicSensitivityPercent,
     setClipboardFallback,
     setLaunchAtStartup,
     saveSettings,
@@ -103,6 +105,18 @@ function Phase2SettingsPanelComponent() {
             </option>
           ))}
         </select>
+      </label>
+      <label className="field">
+        <span>Mic sensitivity ({micSensitivityPercent}%)</span>
+        <input
+          type="range"
+          min={50}
+          max={300}
+          step={5}
+          disabled={!available}
+          value={micSensitivityPercent}
+          onChange={(event) => setMicSensitivityPercent(Number(event.currentTarget.value))}
+        />
       </label>
       <div className="actions">
         <button disabled={!available} onClick={saveSettings}>

@@ -619,6 +619,22 @@ fn trim_pending_backlog(pending_samples: &mut VecDeque<f32>, max_chunk_samples: 
 }
 
 #[cfg(feature = "desktop")]
+fn mic_sensitivity_gain(mic_sensitivity_percent: u16) -> f32 {
+    (mic_sensitivity_percent.clamp(50, 300) as f32 / 100.0).clamp(0.5, 3.0)
+}
+
+#[cfg(feature = "desktop")]
+fn apply_mic_gain(samples: &mut [f32], gain: f32) {
+    if (gain - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+
+    for sample in samples {
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
+    }
+}
+
+#[cfg(feature = "desktop")]
 fn emit_transcript_if_fresh(
     app: &tauri::AppHandle,
     logs_path: &Path,
@@ -655,6 +671,7 @@ fn run_live_capture_worker(
     last_transcript: Arc<Mutex<Option<String>>>,
     logs_path: PathBuf,
     source_sample_rate_hz: u32,
+    mic_gain: f32,
     frame_rx: Receiver<Vec<f32>>,
     stop_rx: Receiver<()>,
 ) {
@@ -669,11 +686,13 @@ fn run_live_capture_worker(
             break;
         }
 
-        let frame = match frame_rx.recv_timeout(Duration::from_millis(60)) {
+        let mut frame = match frame_rx.recv_timeout(Duration::from_millis(60)) {
             Ok(samples) => samples,
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
+
+        apply_mic_gain(&mut frame, mic_gain);
 
         let measured = audio::measure_mic_level(&frame, mic_level, mic_peak);
         mic_level = measured.level;
@@ -767,6 +786,7 @@ fn run_live_capture_session(
     last_transcript: Arc<Mutex<Option<String>>>,
     logs_path: PathBuf,
     microphone_id: Option<String>,
+    mic_sensitivity_percent: u16,
     stop_rx: Receiver<()>,
 ) {
     let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<f32>>(24);
@@ -785,6 +805,7 @@ fn run_live_capture_session(
         last_transcript,
         logs_path,
         input_stream.sample_rate_hz,
+        mic_sensitivity_gain(mic_sensitivity_percent),
         frame_rx,
         stop_rx,
     );
@@ -862,6 +883,7 @@ fn phase1_get_live_capture_active(store: tauri::State<'_, PipelineStore>) -> Res
 fn phase1_start_live_capture(
     app: tauri::AppHandle,
     store: tauri::State<'_, PipelineStore>,
+    settings_state: tauri::State<'_, SettingsState>,
     logs: tauri::State<'_, RuntimeLogState>,
     microphone_id: Option<String>,
 ) -> Result<bool, String> {
@@ -882,6 +904,11 @@ fn phase1_start_live_capture(
     let last_transcript = Arc::clone(&store.last_transcript);
     let logs_path = logs.path.clone();
     let app_for_worker = app.clone();
+    let mic_sensitivity_percent = settings_state
+        .settings
+        .lock()
+        .map_err(|_| "failed to acquire settings state".to_string())?
+        .mic_sensitivity_percent;
     let selected_microphone = microphone_id
         .map(|value| value.trim().to_string())
         .and_then(|value| if value.is_empty() { None } else { Some(value) });
@@ -894,6 +921,7 @@ fn phase1_start_live_capture(
             last_transcript,
             logs_path,
             selected_microphone,
+            mic_sensitivity_percent,
             stop_rx,
         );
     });
@@ -1098,6 +1126,23 @@ mod tests {
         assert_eq!(pending.len(), 50);
         assert_eq!(pending.front().copied(), Some(30.0));
         assert_eq!(pending.back().copied(), Some(79.0));
+    }
+
+    #[test]
+    fn mic_sensitivity_gain_is_clamped() {
+        assert!((mic_sensitivity_gain(50) - 0.5).abs() < f32::EPSILON);
+        assert!((mic_sensitivity_gain(140) - 1.4).abs() < f32::EPSILON);
+        assert!((mic_sensitivity_gain(400) - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mic_gain_amplifies_and_clips_samples() {
+        let mut samples = vec![0.1_f32, -0.3_f32, 0.9_f32];
+        apply_mic_gain(&mut samples, 2.0);
+
+        assert_eq!(samples[0], 0.2);
+        assert_eq!(samples[1], -0.6);
+        assert_eq!(samples[2], 1.0);
     }
 }
 

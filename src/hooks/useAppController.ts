@@ -63,6 +63,8 @@ export function useAppController() {
   );
   const [modelPath, setModelPathInput] = useState<string>("");
   const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string>("");
+  const [micSensitivityPercent, setMicSensitivityPercent] =
+    useState<number>(DEFAULT_SETTINGS.micSensitivityPercent);
   const [availableMicrophones, setAvailableMicrophones] = useState<
     Array<{ id: string; label: string }>
   >([]);
@@ -151,6 +153,7 @@ export function useAppController() {
           setModelProfile(settings.model_profile);
           setModelPathInput(settings.model_path ?? "");
           setSelectedMicrophoneId(settings.microphone_id ?? "");
+          setMicSensitivityPercent(settings.mic_sensitivity_percent);
           setClipboardFallback(settings.clipboard_fallback);
           setLaunchAtStartup(settings.launch_at_startup);
           setInsertions(recentInsertions);
@@ -249,6 +252,7 @@ export function useAppController() {
         model_profile: modelProfile,
         model_path: modelPath.trim() ? modelPath.trim() : null,
         microphone_id: selectedMicrophoneId.trim() ? selectedMicrophoneId : null,
+        mic_sensitivity_percent: Math.max(50, Math.min(300, Math.round(micSensitivityPercent))),
         clipboard_fallback: clipboardFallback,
         launch_at_startup: launchAtStartup,
       });
@@ -258,6 +262,7 @@ export function useAppController() {
       setModelProfile(updated.model_profile);
       setModelPathInput(updated.model_path ?? "");
       setSelectedMicrophoneId(updated.microphone_id ?? "");
+      setMicSensitivityPercent(updated.mic_sensitivity_percent);
       setLaunchAtStartup(updated.launch_at_startup);
       const [status, runtimeTranscriber] = await Promise.all([
         getModelStatus(),
@@ -375,6 +380,7 @@ export function useAppController() {
     modelProfile,
     modelPath,
     selectedMicrophoneId,
+    micSensitivityPercent,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -391,6 +397,7 @@ export function useAppController() {
     setModelProfile,
     setModelPathInput,
     setSelectedMicrophoneId,
+    setMicSensitivityPercent,
     setClipboardFallback,
     setLaunchAtStartup,
     updateMode,

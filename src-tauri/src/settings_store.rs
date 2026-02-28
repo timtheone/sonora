@@ -11,6 +11,7 @@ pub struct AppSettingsPatch {
     pub model_profile: Option<ModelProfile>,
     pub model_path: Option<Option<String>>,
     pub microphone_id: Option<Option<String>>,
+    pub mic_sensitivity_percent: Option<u16>,
     pub clipboard_fallback: Option<bool>,
     pub launch_at_startup: Option<bool>,
 }
@@ -22,7 +23,9 @@ pub fn default_settings_path() -> PathBuf {
 
 pub fn load_or_default(path: &Path) -> AppSettings {
     match fs::read_to_string(path) {
-        Ok(contents) => serde_json::from_str::<AppSettings>(&contents).unwrap_or_default(),
+        Ok(contents) => serde_json::from_str::<AppSettings>(&contents)
+            .map(normalize_settings)
+            .unwrap_or_default(),
         Err(_) => AppSettings::default(),
     }
 }
@@ -37,7 +40,7 @@ pub fn save(path: &Path, settings: &AppSettings) -> Result<(), String> {
 }
 
 pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettings {
-    AppSettings {
+    normalize_settings(AppSettings {
         hotkey: patch
             .hotkey
             .map(|value| value.trim().to_string())
@@ -52,13 +55,22 @@ pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettin
         microphone_id: patch
             .microphone_id
             .unwrap_or_else(|| settings.microphone_id.clone()),
+        mic_sensitivity_percent: patch
+            .mic_sensitivity_percent
+            .map(|value| value.clamp(50, 300))
+            .unwrap_or(settings.mic_sensitivity_percent),
         clipboard_fallback: patch
             .clipboard_fallback
             .unwrap_or(settings.clipboard_fallback),
         launch_at_startup: patch
             .launch_at_startup
             .unwrap_or(settings.launch_at_startup),
-    }
+    })
+}
+
+fn normalize_settings(mut settings: AppSettings) -> AppSettings {
+    settings.mic_sensitivity_percent = settings.mic_sensitivity_percent.clamp(50, 300);
+    settings
 }
 
 fn io_to_string(error: io::Error) -> String {
@@ -89,6 +101,7 @@ mod tests {
                 model_profile: Some(ModelProfile::Fast),
                 model_path: Some(Some("models/custom.bin".to_string())),
                 microphone_id: Some(Some("mic-2".to_string())),
+                mic_sensitivity_percent: Some(185),
                 clipboard_fallback: Some(false),
                 launch_at_startup: Some(true),
             },
@@ -100,8 +113,40 @@ mod tests {
         assert_eq!(updated.model_profile, ModelProfile::Fast);
         assert_eq!(updated.model_path.as_deref(), Some("models/custom.bin"));
         assert_eq!(updated.microphone_id, Some("mic-2".to_string()));
+        assert_eq!(updated.mic_sensitivity_percent, 185);
         assert!(!updated.clipboard_fallback);
         assert!(updated.launch_at_startup);
+    }
+
+    #[test]
+    fn clamps_mic_sensitivity_patch() {
+        let defaults = AppSettings::default();
+        let updated = apply_patch(
+            &defaults,
+            AppSettingsPatch {
+                mic_sensitivity_percent: Some(255),
+                ..AppSettingsPatch::default()
+            },
+        );
+        assert_eq!(updated.mic_sensitivity_percent, 255);
+
+        let clamped_low = apply_patch(
+            &updated,
+            AppSettingsPatch {
+                mic_sensitivity_percent: Some(2),
+                ..AppSettingsPatch::default()
+            },
+        );
+        assert_eq!(clamped_low.mic_sensitivity_percent, 50);
+
+        let clamped_high = apply_patch(
+            &clamped_low,
+            AppSettingsPatch {
+                mic_sensitivity_percent: Some(355),
+                ..AppSettingsPatch::default()
+            },
+        );
+        assert_eq!(clamped_high.mic_sensitivity_percent, 300);
     }
 
     #[test]
@@ -114,6 +159,7 @@ mod tests {
             model_profile: ModelProfile::Fast,
             model_path: Some("models/ggml-tiny.en-q8_0.bin".to_string()),
             microphone_id: None,
+            mic_sensitivity_percent: 165,
             clipboard_fallback: true,
             launch_at_startup: false,
         };
@@ -130,5 +176,18 @@ mod tests {
         let path = temp_file("missing");
         let loaded = load_or_default(&path);
         assert_eq!(loaded, AppSettings::default());
+    }
+
+    #[test]
+    fn load_normalizes_mic_sensitivity_from_file() {
+        let path = temp_file("normalize");
+        let mut settings = AppSettings::default();
+        settings.mic_sensitivity_percent = 999;
+
+        save(&path, &settings).expect("settings should be saved");
+        let loaded = load_or_default(&path);
+        assert_eq!(loaded.mic_sensitivity_percent, 300);
+
+        let _ = fs::remove_file(path);
     }
 }

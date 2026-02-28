@@ -8,6 +8,7 @@ export interface AppSettings {
   model_profile: "fast" | "balanced";
   model_path: string | null;
   microphone_id: string | null;
+  mic_sensitivity_percent: number;
   clipboard_fallback: boolean;
   launch_at_startup: boolean;
 }
@@ -18,6 +19,7 @@ export interface AppSettingsPatch {
   model_profile?: "fast" | "balanced";
   model_path?: string | null;
   microphone_id?: string | null;
+  mic_sensitivity_percent?: number;
   clipboard_fallback?: boolean;
   launch_at_startup?: boolean;
 }

@@ -7,7 +7,7 @@ pub struct VadConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
-            rms_threshold: 0.015,
+            rms_threshold: 0.009,
             min_samples: 512,
         }
     }
@@ -55,5 +55,12 @@ mod tests {
         let config = VadConfig::default();
         let speech = create_chunk(0.12);
         assert!(has_speech(&speech, &config));
+    }
+
+    #[test]
+    fn detects_quieter_signal_with_default_threshold() {
+        let config = VadConfig::default();
+        let quiet = create_chunk(0.015);
+        assert!(has_speech(&quiet, &config));
     }
 }

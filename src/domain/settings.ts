@@ -9,6 +9,7 @@ export interface AppSettings {
   modelProfile: ModelProfile;
   modelPath: string | null;
   microphoneId: string | null;
+  micSensitivityPercent: number;
   clipboardFallback: boolean;
   launchAtStartup: boolean;
 }
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   modelProfile: "balanced",
   modelPath: null,
   microphoneId: null,
+  micSensitivityPercent: 140,
   clipboardFallback: true,
   launchAtStartup: false,
 };
@@ -32,6 +34,10 @@ export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings
     modelProfile: input.modelProfile ?? DEFAULT_SETTINGS.modelProfile,
     modelPath: input.modelPath ?? DEFAULT_SETTINGS.modelPath,
     microphoneId: input.microphoneId ?? DEFAULT_SETTINGS.microphoneId,
+    micSensitivityPercent:
+      input.micSensitivityPercent === undefined
+        ? DEFAULT_SETTINGS.micSensitivityPercent
+        : Math.max(50, Math.min(300, input.micSensitivityPercent)),
     clipboardFallback: input.clipboardFallback ?? DEFAULT_SETTINGS.clipboardFallback,
     launchAtStartup: input.launchAtStartup ?? DEFAULT_SETTINGS.launchAtStartup,
   };
