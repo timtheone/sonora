@@ -3,9 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 export type DictationMode = "push_to_toggle" | "push_to_talk";
 export type DictationState = "idle" | "listening" | "transcribing";
 
+export interface ProfileTuning {
+  min_chunk_samples: number;
+  partial_cadence_ms: number;
+}
+
 export interface PipelineStatus {
   mode: DictationMode;
   state: DictationState;
+  model_profile: "fast" | "balanced";
+  tuning: ProfileTuning;
 }
 
 export interface TranscriptPayload {

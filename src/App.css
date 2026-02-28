@@ -45,6 +45,61 @@ h1 {
   gap: 0.5rem;
 }
 
+.mic-indicator {
+  margin: 0.4rem 0 0.8rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #d8dfed;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.mic-indicator-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
+.mic-indicator-label {
+  font-weight: 600;
+  color: #2a3550;
+}
+
+.mic-dot {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+  border: 1px solid #cad6ea;
+  background: #eef4ff;
+  color: #40547b;
+}
+
+.mic-dot.active {
+  border-color: #87d9a8;
+  background: #e9f9ef;
+  color: #1f6a3c;
+}
+
+.mic-meter-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #dfe7f5;
+  overflow: hidden;
+}
+
+.mic-meter-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #4dbb6f, #e6b749, #d95d5a);
+  transition: width 80ms linear;
+}
+
+.mic-stats {
+  margin-top: 0.4rem;
+}
+
 .field {
   display: flex;
   flex-direction: column;

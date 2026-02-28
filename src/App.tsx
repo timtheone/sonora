@@ -84,6 +84,9 @@ function App() {
   const [transcriberStatus, setTranscriberStatus] =
     useState<TranscriberStatus | null>(null);
   const [liveMicActive, setLiveMicActive] = useState(false);
+  const [micInputLevel, setMicInputLevel] = useState(0);
+  const [micPeakLevel, setMicPeakLevel] = useState(0);
+  const [micSignalActive, setMicSignalActive] = useState(false);
   const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +95,7 @@ function App() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const micSmoothedLevelRef = useRef(0);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -393,6 +397,18 @@ function App() {
     }
 
     try {
+      const currentStatus = await getPhase1Status();
+      const listeningStatus =
+        currentStatus.state === "listening"
+          ? currentStatus
+          : await sendPhase1HotkeyDown();
+      setState(listeningStatus.state);
+      const minChunkSamples = Math.max(
+        512,
+        listeningStatus.tuning?.min_chunk_samples ?? 2048,
+      );
+      const maxChunkSamples = minChunkSamples * 2;
+
       const mediaConstraints: MediaStreamConstraints = selectedMicrophoneId
         ? { audio: { deviceId: { exact: selectedMicrophoneId } } }
         : { audio: true };
@@ -403,20 +419,56 @@ function App() {
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
       let feeding = false;
+      let pendingSamples: number[] = [];
       processor.onaudioprocess = async (event) => {
         if (!processorNodeRef.current || feeding) {
           return;
         }
 
         const input = event.inputBuffer.getChannelData(0);
+        let energySum = 0;
+        let peak = 0;
+        for (let index = 0; index < input.length; index += 1) {
+          const sample = input[index];
+          const absolute = Math.abs(sample);
+          energySum += sample * sample;
+          if (absolute > peak) {
+            peak = absolute;
+          }
+        }
+
+        const rms = Math.sqrt(energySum / input.length);
+        const scaledLevel = Math.min(1, rms * 14);
+        const previousLevel = micSmoothedLevelRef.current;
+        const smoothedLevel =
+          scaledLevel >= previousLevel
+            ? scaledLevel
+            : previousLevel * 0.84 + scaledLevel * 0.16;
+        micSmoothedLevelRef.current = smoothedLevel;
+        setMicInputLevel(smoothedLevel);
+        setMicPeakLevel((previousPeak) => Math.max(previousPeak * 0.96, peak));
+        setMicSignalActive(smoothedLevel > 0.08 || peak > 0.12);
+
         const downsampled = downsampleTo16k(input, audioContext.sampleRate);
         if (downsampled.length === 0) {
           return;
         }
 
+        pendingSamples.push(...downsampled);
+        if (pendingSamples.length < minChunkSamples) {
+          return;
+        }
+
+        const nextChunkSize = Math.min(maxChunkSamples, pendingSamples.length);
+        const chunk = pendingSamples.splice(0, nextChunkSize);
+
+        if (pendingSamples.length > maxChunkSamples * 5) {
+          pendingSamples = pendingSamples.slice(-maxChunkSamples * 2);
+        }
+
         feeding = true;
         try {
-          const transcript = await feedPhase1Audio(downsampled);
+          const transcript = await feedPhase1Audio(chunk);
           if (transcript) {
             setRecentTranscripts((previous) => [transcript, ...previous].slice(0, 3));
           }
@@ -435,12 +487,16 @@ function App() {
       sourceNodeRef.current = source;
       processorNodeRef.current = processor;
 
-      const status = await sendPhase1HotkeyDown();
-      setState(status.state);
       setLiveMicActive(true);
       setError(null);
     } catch (cause) {
       await stopLiveMicInternal();
+      try {
+        const status = await cancelPhase1();
+        setState(status.state);
+      } catch {
+        // noop
+      }
       setError(String(cause));
     }
   }
@@ -468,6 +524,10 @@ function App() {
     sourceNodeRef.current = null;
     mediaStreamRef.current = null;
     audioContextRef.current = null;
+    micSmoothedLevelRef.current = 0;
+    setMicInputLevel(0);
+    setMicPeakLevel(0);
+    setMicSignalActive(false);
     setLiveMicActive(false);
   }
 
@@ -479,6 +539,23 @@ function App() {
       <section className="panel">
         <h2>Phase 1 Controls</h2>
         <p className="muted">Live mic: {liveMicActive ? "active" : "inactive"}</p>
+        <div className="mic-indicator" aria-live="polite">
+          <div className="mic-indicator-head">
+            <span className="mic-indicator-label">Mic capture</span>
+            <span className={`mic-dot ${micSignalActive ? "active" : "idle"}`}>
+              {micSignalActive ? "Signal" : "Quiet"}
+            </span>
+          </div>
+          <div className="mic-meter-track">
+            <div
+              className="mic-meter-fill"
+              style={{ width: `${Math.round(micInputLevel * 100)}%` }}
+            />
+          </div>
+          <p className="muted mic-stats">
+            Level {Math.round(micInputLevel * 100)}% | Peak {Math.round(micPeakLevel * 100)}%
+          </p>
+        </div>
         <div className="actions">
           <button disabled={!available} onClick={() => updateMode("push_to_toggle")}>Use Toggle Mode</button>
           <button disabled={!available} onClick={() => updateMode("push_to_talk")}>Use Push Mode</button>

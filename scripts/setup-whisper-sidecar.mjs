@@ -151,6 +151,40 @@ function resolveBuiltExecutable() {
   return candidates.find((candidate) => existsSync(candidate));
 }
 
+async function resolveBuiltRuntimeLibraries() {
+  const candidateDirs = [
+    path.join(buildDir, "bin"),
+    path.join(buildDir, "bin", "Release"),
+    path.join(buildDir, "src"),
+    path.join(buildDir, "src", "Release"),
+  ];
+
+  const patterns = platform === "win32" ? [".dll"] : platform === "darwin" ? [".dylib"] : [".so"];
+  const files = [];
+
+  for (const dir of candidateDirs) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!patterns.some((suffix) => entry.name.endsWith(suffix))) {
+        continue;
+      }
+      if (!(entry.name.includes("whisper") || entry.name.includes("ggml"))) {
+        continue;
+      }
+      files.push(path.join(dir, entry.name));
+    }
+  }
+
+  return files;
+}
+
 async function copyExecutable(binaryPath) {
   await ensureDir(outputDir);
   const destination = path.join(outputDir, executableName);
@@ -161,6 +195,20 @@ async function copyExecutable(binaryPath) {
   }
 
   process.stdout.write(`Copied sidecar binary to ${destination}\n`);
+}
+
+async function copyRuntimeLibraries() {
+  const libraries = await resolveBuiltRuntimeLibraries();
+  if (libraries.length === 0) {
+    return;
+  }
+
+  await ensureDir(outputDir);
+  for (const library of libraries) {
+    const destination = path.join(outputDir, path.basename(library));
+    await fs.copyFile(library, destination);
+    process.stdout.write(`Copied runtime library to ${destination}\n`);
+  }
 }
 
 async function main() {
@@ -180,8 +228,11 @@ async function main() {
     sourceDir,
     "-B",
     buildDir,
+    "-DBUILD_SHARED_LIBS=OFF",
     "-DWHISPER_BUILD_EXAMPLES=ON",
     "-DWHISPER_BUILD_TESTS=OFF",
+    "-DWHISPER_BUILD_SERVER=OFF",
+    "-DGGML_BACKEND_DL=OFF",
   ]);
 
   process.stdout.write("Building whisper.cpp sidecar...\n");
@@ -195,6 +246,7 @@ async function main() {
   }
 
   await copyExecutable(built);
+  await copyRuntimeLibraries();
 }
 
 main().catch((error) => {
