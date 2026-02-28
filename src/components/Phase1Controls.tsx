@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useRef } from "react";
 import {
   MicLevelPeakIndicator,
   type MicLevelPeakIndicatorHandle,
@@ -23,7 +23,7 @@ function Phase1ControlsComponent() {
 
   const indicatorRef = useRef<MicLevelPeakIndicatorHandle>(null);
 
-  const { liveMicActive, startLiveMic, stopLiveMic, stopLiveMicInternal } = useLiveMicCapture({
+  const { liveMicActive, startLiveMic, stopLiveMic } = useLiveMicCapture({
     available,
     selectedMicrophoneId,
     ensureListening: async () => {
@@ -40,12 +40,6 @@ function Phase1ControlsComponent() {
     },
     onError: reportError,
   });
-
-  useEffect(() => {
-    return () => {
-      void stopLiveMicInternal();
-    };
-  }, [stopLiveMicInternal]);
 
   async function feedSilence() {
     try {

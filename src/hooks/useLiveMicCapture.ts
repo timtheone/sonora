@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { downsampleTo16k } from "../domain/audio-resample";
 import type { PipelineStatus } from "../services/phase1";
 
@@ -32,7 +32,7 @@ export function useLiveMicCapture({
   const micSmoothedLevelRef = useRef(0);
   const micPeakLevelRef = useRef(0);
 
-  async function stopLiveMicInternal() {
+  const stopLiveMicInternal = useCallback(async () => {
     if (workletNodeRef.current) {
       workletNodeRef.current.port.onmessage = null;
       workletNodeRef.current.disconnect();
@@ -52,9 +52,9 @@ export function useLiveMicCapture({
     micPeakLevelRef.current = 0;
     onMicLevel(0, 0, false);
     setLiveMicActive(false);
-  }
+  }, [onMicLevel]);
 
-  async function startLiveMic() {
+  const startLiveMic = useCallback(async () => {
     if (!available || liveMicActive) {
       return;
     }
@@ -174,12 +174,28 @@ export function useLiveMicCapture({
       await stopListening();
       onError(cause);
     }
-  }
+  }, [
+    available,
+    liveMicActive,
+    ensureListening,
+    selectedMicrophoneId,
+    feedAudioChunk,
+    onMicLevel,
+    onError,
+    stopListening,
+    stopLiveMicInternal,
+  ]);
 
-  async function stopLiveMic() {
+  const stopLiveMic = useCallback(async () => {
     await stopLiveMicInternal();
     await stopListening();
-  }
+  }, [stopLiveMicInternal, stopListening]);
+
+  useEffect(() => {
+    return () => {
+      void stopLiveMicInternal();
+    };
+  }, [stopLiveMicInternal]);
 
   return {
     liveMicActive,
