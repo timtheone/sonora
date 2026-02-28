@@ -29,6 +29,7 @@ function Phase4EnvironmentPanelComponent() {
       {transcriberStatus ? (
         <ul>
           <li>Transcriber ready: {transcriberStatus.ready ? "yes" : "no"}</li>
+          <li>Engine: {transcriberStatus.active_engine}</li>
           <li>Transcriber: {transcriberStatus.description}</li>
           <li>Compute backend: {transcriberStatus.compute_backend}</li>
           <li>GPU active: {transcriberStatus.using_gpu ? "yes" : "no"}</li>

@@ -1,7 +1,9 @@
 import type { DictationMode } from "./dictation-machine";
 
 export type ModelProfile = "balanced" | "fast";
+export type SttEngine = "whisper_cpp" | "faster_whisper";
 export type WhisperBackendPreference = "auto" | "cpu" | "cuda";
+export type FasterWhisperComputeType = "auto" | "int8" | "float16" | "float32";
 
 export const CHUNK_DURATION_MIN_MS = 500;
 export const CHUNK_DURATION_MAX_MS = 4000;
@@ -41,12 +43,16 @@ export interface AppSettings {
   mode: DictationMode;
   language: "en";
   modelProfile: ModelProfile;
+  sttEngine: SttEngine;
   modelPath: string | null;
   microphoneId: string | null;
   micSensitivityPercent: number;
   chunkDurationMs: number;
   partialCadenceMs: number;
   whisperBackendPreference: WhisperBackendPreference;
+  fasterWhisperModel: string | null;
+  fasterWhisperComputeType: FasterWhisperComputeType;
+  fasterWhisperBeamSize: number;
   clipboardFallback: boolean;
   launchAtStartup: boolean;
 }
@@ -56,12 +62,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mode: "push_to_toggle",
   language: "en",
   modelProfile: "balanced",
+  sttEngine: "whisper_cpp",
   modelPath: null,
   microphoneId: null,
   micSensitivityPercent: 170,
   chunkDurationMs: 2000,
   partialCadenceMs: 1400,
   whisperBackendPreference: "auto",
+  fasterWhisperModel: null,
+  fasterWhisperComputeType: "auto",
+  fasterWhisperBeamSize: 1,
   clipboardFallback: true,
   launchAtStartup: false,
 };
@@ -72,6 +82,7 @@ export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings
     mode: input.mode ?? DEFAULT_SETTINGS.mode,
     language: "en",
     modelProfile: input.modelProfile ?? DEFAULT_SETTINGS.modelProfile,
+    sttEngine: input.sttEngine ?? DEFAULT_SETTINGS.sttEngine,
     modelPath: input.modelPath ?? DEFAULT_SETTINGS.modelPath,
     microphoneId: input.microphoneId ?? DEFAULT_SETTINGS.microphoneId,
     micSensitivityPercent:
@@ -88,6 +99,15 @@ export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings
     ),
     whisperBackendPreference:
       input.whisperBackendPreference ?? DEFAULT_SETTINGS.whisperBackendPreference,
+    fasterWhisperModel: input.fasterWhisperModel?.trim()
+      ? input.fasterWhisperModel.trim()
+      : DEFAULT_SETTINGS.fasterWhisperModel,
+    fasterWhisperComputeType:
+      input.fasterWhisperComputeType ?? DEFAULT_SETTINGS.fasterWhisperComputeType,
+    fasterWhisperBeamSize:
+      input.fasterWhisperBeamSize === undefined
+        ? DEFAULT_SETTINGS.fasterWhisperBeamSize
+        : Math.max(1, Math.min(8, Math.round(input.fasterWhisperBeamSize))),
     clipboardFallback: input.clipboardFallback ?? DEFAULT_SETTINGS.clipboardFallback,
     launchAtStartup: input.launchAtStartup ?? DEFAULT_SETTINGS.launchAtStartup,
   };

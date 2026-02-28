@@ -28,6 +28,7 @@ import {
   insertPhase2Text,
   updatePhase2Settings,
   type InsertionRecord,
+  type SttEngine,
 } from "../services/phase2";
 import {
   autoSelectHardwareProfile,
@@ -70,6 +71,7 @@ export function useAppController() {
   const [modelProfile, setModelProfile] = useState<"fast" | "balanced">(
     DEFAULT_SETTINGS.modelProfile,
   );
+  const [sttEngine, setSttEngine] = useState<SttEngine>(DEFAULT_SETTINGS.sttEngine);
   const [modelPath, setModelPathInput] = useState<string>("");
   const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string>("");
   const [micSensitivityPercent, setMicSensitivityPercent] =
@@ -80,6 +82,14 @@ export function useAppController() {
     useState<number>(DEFAULT_SETTINGS.partialCadenceMs);
   const [whisperBackendPreference, setWhisperBackendPreference] =
     useState<"auto" | "cpu" | "cuda">(DEFAULT_SETTINGS.whisperBackendPreference);
+  const [fasterWhisperModel, setFasterWhisperModel] =
+    useState<string>(DEFAULT_SETTINGS.fasterWhisperModel ?? "");
+  const [fasterWhisperComputeType, setFasterWhisperComputeType] =
+    useState<"auto" | "int8" | "float16" | "float32">(
+      DEFAULT_SETTINGS.fasterWhisperComputeType,
+    );
+  const [fasterWhisperBeamSize, setFasterWhisperBeamSize] =
+    useState<number>(DEFAULT_SETTINGS.fasterWhisperBeamSize);
   const [availableMicrophones, setAvailableMicrophones] = useState<
     Array<{ id: string; label: string }>
   >([]);
@@ -166,6 +176,7 @@ export function useAppController() {
           applyPhaseStatus(phase1Status);
           setHotkey(settings.hotkey);
           setModelProfile(settings.model_profile);
+          setSttEngine(settings.stt_engine);
           setModelPathInput(settings.model_path ?? "");
           setSelectedMicrophoneId(settings.microphone_id ?? "");
           setMicSensitivityPercent(settings.mic_sensitivity_percent);
@@ -176,6 +187,9 @@ export function useAppController() {
             effectivePartialCadenceMs(settings.model_profile, settings.partial_cadence_ms),
           );
           setWhisperBackendPreference(settings.whisper_backend_preference);
+          setFasterWhisperModel(settings.faster_whisper_model ?? "");
+          setFasterWhisperComputeType(settings.faster_whisper_compute_type);
+          setFasterWhisperBeamSize(Math.max(1, Math.min(8, settings.faster_whisper_beam_size)));
           setClipboardFallback(settings.clipboard_fallback);
           setLaunchAtStartup(settings.launch_at_startup);
           setInsertions(recentInsertions);
@@ -282,6 +296,7 @@ export function useAppController() {
         hotkey,
         mode,
         model_profile: modelProfile,
+        stt_engine: sttEngine,
         model_path: modelPath.trim() ? modelPath.trim() : null,
         microphone_id: selectedMicrophoneId.trim() ? selectedMicrophoneId : null,
         mic_sensitivity_percent: Math.max(50, Math.min(300, Math.round(micSensitivityPercent))),
@@ -294,6 +309,9 @@ export function useAppController() {
           Math.min(PARTIAL_CADENCE_MAX_MS, Math.round(partialCadenceMs)),
         ),
         whisper_backend_preference: whisperBackendPreference,
+        faster_whisper_model: fasterWhisperModel.trim() ? fasterWhisperModel.trim() : null,
+        faster_whisper_compute_type: fasterWhisperComputeType,
+        faster_whisper_beam_size: Math.max(1, Math.min(8, Math.round(fasterWhisperBeamSize))),
         clipboard_fallback: clipboardFallback,
         launch_at_startup: launchAtStartup,
       });
@@ -301,6 +319,7 @@ export function useAppController() {
       setClipboardFallback(updated.clipboard_fallback);
       setMode(updated.mode);
       setModelProfile(updated.model_profile);
+      setSttEngine(updated.stt_engine);
       setModelPathInput(updated.model_path ?? "");
       setSelectedMicrophoneId(updated.microphone_id ?? "");
       setMicSensitivityPercent(updated.mic_sensitivity_percent);
@@ -309,6 +328,9 @@ export function useAppController() {
         effectivePartialCadenceMs(updated.model_profile, updated.partial_cadence_ms),
       );
       setWhisperBackendPreference(updated.whisper_backend_preference);
+      setFasterWhisperModel(updated.faster_whisper_model ?? "");
+      setFasterWhisperComputeType(updated.faster_whisper_compute_type);
+      setFasterWhisperBeamSize(Math.max(1, Math.min(8, updated.faster_whisper_beam_size)));
       setLaunchAtStartup(updated.launch_at_startup);
       const [status, runtimeTranscriber] = await Promise.all([
         getModelStatus(),
@@ -343,6 +365,7 @@ export function useAppController() {
       setHardwareProfile(hardware);
       setModelStatus(status);
       setModelProfile(updatedSettings.model_profile);
+      setSttEngine(updatedSettings.stt_engine);
       setModelPathInput(updatedSettings.model_path ?? "");
       setChunkDurationMs(
         effectiveChunkDurationMs(updatedSettings.model_profile, updatedSettings.chunk_duration_ms),
@@ -351,6 +374,11 @@ export function useAppController() {
         effectivePartialCadenceMs(updatedSettings.model_profile, updatedSettings.partial_cadence_ms),
       );
       setWhisperBackendPreference(updatedSettings.whisper_backend_preference);
+      setFasterWhisperModel(updatedSettings.faster_whisper_model ?? "");
+      setFasterWhisperComputeType(updatedSettings.faster_whisper_compute_type);
+      setFasterWhisperBeamSize(
+        Math.max(1, Math.min(8, updatedSettings.faster_whisper_beam_size)),
+      );
       setTranscriberStatus(await getTranscriberStatus());
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
@@ -431,12 +459,16 @@ export function useAppController() {
     insertions,
     hotkey,
     modelProfile,
+    sttEngine,
     modelPath,
     selectedMicrophoneId,
     micSensitivityPercent,
     chunkDurationMs,
     partialCadenceMs,
     whisperBackendPreference,
+    fasterWhisperModel,
+    fasterWhisperComputeType,
+    fasterWhisperBeamSize,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -451,12 +483,16 @@ export function useAppController() {
     setMode,
     setHotkey,
     setModelProfile,
+    setSttEngine,
     setModelPathInput,
     setSelectedMicrophoneId,
     setMicSensitivityPercent,
     setChunkDurationMs,
     setPartialCadenceMs,
     setWhisperBackendPreference,
+    setFasterWhisperModel,
+    setFasterWhisperComputeType,
+    setFasterWhisperBeamSize,
     setClipboardFallback,
     setLaunchAtStartup,
     updateMode,

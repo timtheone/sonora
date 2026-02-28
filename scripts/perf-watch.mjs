@@ -69,6 +69,7 @@ function formatMs(value) {
 function formatRow(row, widths) {
   return [
     pad(row.chunk, widths.chunk),
+    pad(row.engine, widths.engine),
     pad(row.audio, widths.audio),
     pad(row.collect, widths.collect),
     pad(row.downsample, widths.downsample),
@@ -90,6 +91,7 @@ function renderTable(state) {
       const total = emitUi === null ? chunk.total_worker_ms : chunk.total_worker_ms + emitUi;
       return {
         chunk: chunk.chunk_id,
+        engine: chunk.engine ?? "-",
         audio: formatMs(chunk.chunk_audio_ms),
         collect: formatMs(chunk.collect_ms),
         downsample: formatMs(chunk.downsample_ms),
@@ -104,6 +106,7 @@ function renderTable(state) {
 
   const widths = {
     chunk: 6,
+    engine: 14,
     audio: 8,
     collect: 9,
     downsample: 9,
@@ -143,6 +146,7 @@ function renderTable(state) {
   const header = formatRow(
     {
       chunk: "chunk",
+      engine: "engine",
       audio: "audio_ms",
       collect: "collect",
       downsample: "downsmpl",

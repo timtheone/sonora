@@ -38,6 +38,8 @@ pub struct ChunkProcessMetrics {
     pub had_speech: bool,
     pub vad_ms: u64,
     pub inference_ms: u64,
+    pub engine: String,
+    pub model: String,
     pub transcript: Option<String>,
 }
 
@@ -117,6 +119,8 @@ impl<T: Transcriber> DictationPipeline<T> {
             had_speech: false,
             vad_ms: 0,
             inference_ms: 0,
+            engine: self.transcriber.engine_label().to_string(),
+            model: self.transcriber.model_label(),
             transcript: None,
         };
 

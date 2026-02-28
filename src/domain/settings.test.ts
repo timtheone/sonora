@@ -53,4 +53,20 @@ describe("settings", () => {
     expect(effectivePartialCadenceMs("balanced", 100)).toBe(300);
     expect(effectivePartialCadenceMs("balanced", 3000)).toBe(2500);
   });
+
+  it("preserves selected engine when provided", () => {
+    expect(normalizeSettings({ sttEngine: "faster_whisper" }).sttEngine).toBe("faster_whisper");
+  });
+
+  it("normalizes faster-whisper settings", () => {
+    const normalized = normalizeSettings({
+      fasterWhisperModel: "  small.en  ",
+      fasterWhisperBeamSize: 99,
+      fasterWhisperComputeType: "float16",
+    });
+
+    expect(normalized.fasterWhisperModel).toBe("small.en");
+    expect(normalized.fasterWhisperBeamSize).toBe(8);
+    expect(normalized.fasterWhisperComputeType).toBe("float16");
+  });
 });

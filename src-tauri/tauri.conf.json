@@ -25,8 +25,9 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/models/*",
-      "resources/bin/*"
+      "resources/models",
+      "resources/bin",
+      "resources/faster-whisper"
     ],
     "icon": [
       "icons/32x32.png",

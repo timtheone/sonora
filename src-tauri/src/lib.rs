@@ -14,7 +14,7 @@ pub mod vad;
 #[cfg(feature = "desktop")]
 use config::AppSettings;
 #[cfg(feature = "desktop")]
-use config::{DictationMode, ModelProfile};
+use config::{DictationMode, ModelProfile, SttEngine};
 #[cfg(feature = "desktop")]
 use environment::EnvironmentHealth;
 #[cfg(feature = "desktop")]
@@ -54,7 +54,7 @@ use tauri::Emitter;
 use tauri::Manager;
 #[cfg(feature = "desktop")]
 use transcriber::{
-    build_runtime_transcriber, resolve_binary_candidates, resolve_binary_path, RuntimeTranscriber,
+    build_runtime_engine, default_faster_whisper_model, EngineSpec, RuntimeTranscriber,
 };
 
 #[cfg(feature = "desktop")]
@@ -112,6 +112,7 @@ struct HardwareProfileStatus {
 #[derive(Clone, Serialize)]
 struct TranscriberStatus {
     ready: bool,
+    active_engine: String,
     description: String,
     compute_backend: String,
     using_gpu: bool,
@@ -193,6 +194,8 @@ struct TranscriptCorrelation {
 #[derive(Clone, Serialize)]
 struct PerfChunkTrace {
     chunk_id: u64,
+    engine: String,
+    model: String,
     source_sample_rate_hz: u32,
     chunk_samples: usize,
     chunk_audio_ms: u64,
@@ -343,33 +346,44 @@ fn current_logical_cores() -> usize {
 }
 
 #[cfg(feature = "desktop")]
+fn resolve_engine_model_path(settings: &AppSettings, resource_dir: Option<&Path>) -> PathBuf {
+    match settings.stt_engine {
+        SttEngine::WhisperCpp => profile::resolve_model_path(settings, resource_dir),
+        SttEngine::FasterWhisper => settings
+            .faster_whisper_model
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(default_faster_whisper_model(settings.model_profile))),
+    }
+}
+
+#[cfg(feature = "desktop")]
 fn build_transcriber_status(app: &tauri::AppHandle, settings: &AppSettings) -> TranscriberStatus {
     let resource_dir = app.path().resource_dir().ok();
-    let model_path = profile::resolve_model_path(settings, resource_dir.as_deref());
-    let binary_path = resolve_binary_path(resource_dir.as_deref());
-    let checked_binary_paths = resolve_binary_candidates(resource_dir.as_deref())
-        .into_iter()
-        .map(|path| path.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
+    let model_path = resolve_engine_model_path(settings, resource_dir.as_deref());
+    let runtime = build_runtime_engine(EngineSpec {
+        engine: settings.stt_engine,
+        language: settings.language.clone(),
+        model_profile: settings.model_profile,
+        model_path,
+        whisper_backend_preference: settings.whisper_backend_preference,
+        faster_whisper_compute_type: settings.faster_whisper_compute_type,
+        faster_whisper_beam_size: settings.faster_whisper_beam_size,
+        resource_dir,
+    });
 
-    let runtime = build_runtime_transcriber(
-        &settings.language,
-        settings.model_profile,
-        model_path.clone(),
-        settings.whisper_backend_preference,
-        resource_dir.as_deref(),
-    );
-
-    let ready = matches!(runtime, RuntimeTranscriber::Whisper(_));
     TranscriberStatus {
-        ready,
-        description: runtime.description(),
-        compute_backend: runtime.compute_backend_label(),
-        using_gpu: runtime.uses_gpu(),
-        resolved_binary_path: binary_path.map(|path| path.to_string_lossy().to_string()),
-        checked_binary_paths,
-        resolved_model_path: model_path.to_string_lossy().to_string(),
-        model_exists: model_path.exists(),
+        ready: runtime.diagnostics.ready,
+        active_engine: runtime.diagnostics.active_engine,
+        description: runtime.diagnostics.description,
+        compute_backend: runtime.diagnostics.compute_backend,
+        using_gpu: runtime.diagnostics.using_gpu,
+        resolved_binary_path: runtime.diagnostics.resolved_binary_path,
+        checked_binary_paths: runtime.diagnostics.checked_binary_paths,
+        resolved_model_path: runtime.diagnostics.resolved_model_path,
+        model_exists: runtime.diagnostics.model_exists,
     }
 }
 
@@ -380,14 +394,17 @@ fn apply_runtime_transcriber_from_settings(
     pipeline_store: &tauri::State<'_, PipelineStore>,
 ) -> Result<TranscriberStatus, String> {
     let resource_dir = app.path().resource_dir().ok();
-    let model_path = profile::resolve_model_path(settings, resource_dir.as_deref());
-    let runtime = build_runtime_transcriber(
-        &settings.language,
-        settings.model_profile,
+    let model_path = resolve_engine_model_path(settings, resource_dir.as_deref());
+    let runtime = build_runtime_engine(EngineSpec {
+        engine: settings.stt_engine,
+        language: settings.language.clone(),
+        model_profile: settings.model_profile,
         model_path,
-        settings.whisper_backend_preference,
-        resource_dir.as_deref(),
-    );
+        whisper_backend_preference: settings.whisper_backend_preference,
+        faster_whisper_compute_type: settings.faster_whisper_compute_type,
+        faster_whisper_beam_size: settings.faster_whisper_beam_size,
+        resource_dir,
+    });
 
     let mut pipeline = pipeline_store
         .pipeline
@@ -395,7 +412,7 @@ fn apply_runtime_transcriber_from_settings(
         .map_err(|_| "failed to acquire pipeline state".to_string())?;
     pipeline.set_model_profile(settings.model_profile);
     pipeline.set_tuning(tuning_for_settings(settings));
-    pipeline.set_transcriber(runtime);
+    pipeline.set_transcriber(runtime.transcriber);
 
     Ok(build_transcriber_status(app, settings))
 }
@@ -922,6 +939,8 @@ fn run_transcription_worker(
             "perf.chunk",
             &PerfChunkTrace {
                 chunk_id,
+                engine: metrics.engine,
+                model: metrics.model,
                 source_sample_rate_hz,
                 chunk_samples: chunk.len(),
                 chunk_audio_ms: (chunk.len() as u64).saturating_mul(1_000) / 16_000,

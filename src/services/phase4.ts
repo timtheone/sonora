@@ -20,6 +20,7 @@ export interface RecoveryCheckpoint {
 
 export interface TranscriberStatus {
   ready: boolean;
+  active_engine: string;
   description: string;
   compute_backend: string;
   using_gpu: boolean;
