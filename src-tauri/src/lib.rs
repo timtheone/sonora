@@ -47,7 +47,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "desktop")]
 use std::thread;
 #[cfg(feature = "desktop")]
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 #[cfg(feature = "desktop")]
@@ -143,12 +143,13 @@ struct InsertionState {
 #[cfg(feature = "desktop")]
 struct RuntimeLogState {
     path: PathBuf,
+    perf_enabled: bool,
 }
 
 #[cfg(feature = "desktop")]
 impl RuntimeLogState {
-    fn new(path: PathBuf) -> Self {
-        Self { path }
+    fn new(path: PathBuf, perf_enabled: bool) -> Self {
+        Self { path, perf_enabled }
     }
 }
 
@@ -172,6 +173,48 @@ impl RecoveryState {
 #[derive(Clone, Serialize)]
 struct TranscriptPayload {
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chunk_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    emitted_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Clone, Copy)]
+struct TranscriptCorrelation {
+    chunk_id: u64,
+    emitted_unix_ms: u64,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Clone, Serialize)]
+struct PerfChunkTrace {
+    chunk_id: u64,
+    source_sample_rate_hz: u32,
+    chunk_samples: usize,
+    chunk_audio_ms: u64,
+    queue_samples_before_chunk: usize,
+    collect_ms: u64,
+    downsample_ms: u64,
+    pipeline_ms: u64,
+    vad_ms: u64,
+    inference_ms: u64,
+    emit_rust_ms: u64,
+    total_worker_ms: u64,
+    listening: bool,
+    enough_samples: bool,
+    had_speech: bool,
+    emitted_transcript: bool,
+    transcript_len: usize,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Clone, Serialize)]
+struct PerfUiTranscriptTrace {
+    chunk_id: u64,
+    emitted_unix_ms: u64,
+    received_unix_ms: u64,
+    emit_to_ui_ms: u64,
 }
 
 #[cfg(feature = "desktop")]
@@ -226,6 +269,32 @@ fn phase4_get_transcriber_status(
         .map_err(|_| "failed to acquire settings state".to_string())?
         .clone();
     Ok(build_transcriber_status(&app, &current))
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn phase4_perf_mark_ui_transcript_received(
+    logs: tauri::State<'_, RuntimeLogState>,
+    chunk_id: u64,
+    emitted_unix_ms: u64,
+) -> Result<(), String> {
+    if !logs.perf_enabled {
+        return Ok(());
+    }
+
+    let received_unix_ms = current_unix_ms_u64();
+    append_perf_event(
+        &logs.path,
+        logs.perf_enabled,
+        "perf.ui_transcript",
+        &PerfUiTranscriptTrace {
+            chunk_id,
+            emitted_unix_ms,
+            received_unix_ms,
+            emit_to_ui_ms: received_unix_ms.saturating_sub(emitted_unix_ms),
+        },
+    );
+    Ok(())
 }
 
 #[cfg(feature = "desktop")]
@@ -650,11 +719,48 @@ fn should_emit_meter_update(elapsed: Duration) -> bool {
 }
 
 #[cfg(feature = "desktop")]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(feature = "desktop")]
+fn current_unix_ms_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "desktop")]
+fn is_perf_enabled_from_env() -> bool {
+    std::env::var("SONORA_PERF")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "on" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "desktop")]
+fn append_perf_event<T: Serialize>(path: &Path, perf_enabled: bool, event: &str, payload: &T) {
+    if !perf_enabled {
+        return;
+    }
+
+    if let Ok(message) = serde_json::to_string(payload) {
+        let _ = log_store::append(path, "info", event, &message);
+    }
+}
+
+#[cfg(feature = "desktop")]
 fn emit_transcript_if_fresh(
     app: &tauri::AppHandle,
     logs_path: &Path,
     last_transcript: &Arc<Mutex<Option<String>>>,
     raw_transcript: Option<String>,
+    correlation: Option<TranscriptCorrelation>,
 ) -> Result<Option<String>, String> {
     let mut last = last_transcript
         .lock()
@@ -664,7 +770,11 @@ fn emit_transcript_if_fresh(
     if let Some(text) = &transcript {
         app.emit(
             "dictation:transcript",
-            TranscriptPayload { text: text.clone() },
+            TranscriptPayload {
+                text: text.clone(),
+                chunk_id: correlation.map(|value| value.chunk_id),
+                emitted_unix_ms: correlation.map(|value| value.emitted_unix_ms),
+            },
         )
         .map_err(|error| error.to_string())?;
 
@@ -686,10 +796,14 @@ fn run_transcription_worker(
     last_transcript: Arc<Mutex<Option<String>>>,
     logs_path: PathBuf,
     source_sample_rate_hz: u32,
+    perf_enabled: bool,
     frame_rx: Receiver<Vec<f32>>,
 ) {
     let mut pending_samples = VecDeque::<f32>::new();
     let mut last_feed_at = Instant::now() - Duration::from_secs(8);
+    let mut pending_started_at: Option<Instant> = None;
+    let mut pending_downsample_ms = 0u64;
+    let mut chunk_id = 0u64;
 
     loop {
         let frame = match frame_rx.recv_timeout(Duration::from_millis(FRAME_RECV_TIMEOUT_MS)) {
@@ -698,9 +812,15 @@ fn run_transcription_worker(
             Err(RecvTimeoutError::Disconnected) => break,
         };
 
+        let downsample_started_at = Instant::now();
         let downsampled = audio::downsample_to_16k(&frame, source_sample_rate_hz);
+        pending_downsample_ms = pending_downsample_ms
+            .saturating_add(duration_millis_u64(downsample_started_at.elapsed()));
         if downsampled.is_empty() {
             continue;
+        }
+        if pending_samples.is_empty() {
+            pending_started_at = Some(Instant::now());
         }
         pending_samples.extend(downsampled);
 
@@ -728,19 +848,30 @@ fn run_transcription_worker(
             continue;
         };
 
+        chunk_id = chunk_id.saturating_add(1);
+        let queue_samples_before_chunk = pending_samples.len();
+        let collect_ms = pending_started_at
+            .map(|started_at| duration_millis_u64(started_at.elapsed()))
+            .unwrap_or(0);
+        let chunk_started_at = Instant::now();
+
         let mut chunk = Vec::<f32>::with_capacity(chunk_plan.next_chunk_size);
         for _ in 0..chunk_plan.next_chunk_size {
             if let Some(sample) = pending_samples.pop_front() {
                 chunk.push(sample);
             }
         }
+        if pending_samples.is_empty() {
+            pending_started_at = None;
+        }
 
         trim_pending_backlog(&mut pending_samples, chunk_plan.max_chunk_samples);
 
         last_feed_at = Instant::now();
 
-        let raw_transcript = match pipeline.lock() {
-            Ok(mut locked) => match locked.process_audio_chunk(&chunk) {
+        let pipeline_started_at = Instant::now();
+        let metrics = match pipeline.lock() {
+            Ok(mut locked) => match locked.process_audio_chunk_profiled(&chunk) {
                 Ok(value) => value,
                 Err(error) => {
                     let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
@@ -757,12 +888,53 @@ fn run_transcription_worker(
                 break;
             }
         };
+        let pipeline_ms = duration_millis_u64(pipeline_started_at.elapsed());
 
-        if let Err(error) =
-            emit_transcript_if_fresh(&app, &logs_path, &last_transcript, raw_transcript)
-        {
-            let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
-        }
+        let emitted_unix_ms = current_unix_ms_u64();
+        let emit_started_at = Instant::now();
+        let emitted_transcript = match emit_transcript_if_fresh(
+            &app,
+            &logs_path,
+            &last_transcript,
+            metrics.transcript.clone(),
+            Some(TranscriptCorrelation {
+                chunk_id,
+                emitted_unix_ms,
+            }),
+        ) {
+            Ok(value) => value.is_some(),
+            Err(error) => {
+                let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+                false
+            }
+        };
+        let emit_rust_ms = duration_millis_u64(emit_started_at.elapsed());
+
+        append_perf_event(
+            &logs_path,
+            perf_enabled,
+            "perf.chunk",
+            &PerfChunkTrace {
+                chunk_id,
+                source_sample_rate_hz,
+                chunk_samples: chunk.len(),
+                chunk_audio_ms: (chunk.len() as u64).saturating_mul(1_000) / 16_000,
+                queue_samples_before_chunk,
+                collect_ms,
+                downsample_ms: pending_downsample_ms,
+                pipeline_ms,
+                vad_ms: metrics.vad_ms,
+                inference_ms: metrics.inference_ms,
+                emit_rust_ms,
+                total_worker_ms: duration_millis_u64(chunk_started_at.elapsed()),
+                listening: metrics.listening,
+                enough_samples: metrics.enough_samples,
+                had_speech: metrics.had_speech,
+                emitted_transcript,
+                transcript_len: metrics.transcript.as_deref().map(str::len).unwrap_or(0),
+            },
+        );
+        pending_downsample_ms = 0;
     }
 }
 
@@ -772,6 +944,7 @@ fn run_live_capture_session(
     pipeline: Arc<Mutex<DictationPipeline<RuntimeTranscriber>>>,
     last_transcript: Arc<Mutex<Option<String>>>,
     logs_path: PathBuf,
+    perf_enabled: bool,
     microphone_id: Option<String>,
     mic_sensitivity_percent: u16,
     stop_rx: Receiver<()>,
@@ -800,6 +973,7 @@ fn run_live_capture_session(
             transcripts_for_transcription,
             logs_for_transcription,
             source_sample_rate_hz,
+            perf_enabled,
             transcribe_rx,
         );
     });
@@ -940,6 +1114,7 @@ fn phase1_start_live_capture(
     let pipeline = Arc::clone(&store.pipeline);
     let last_transcript = Arc::clone(&store.last_transcript);
     let logs_path = logs.path.clone();
+    let perf_enabled = logs.perf_enabled;
     let app_for_worker = app.clone();
     let mic_sensitivity_percent = settings_state
         .settings
@@ -957,6 +1132,7 @@ fn phase1_start_live_capture(
             pipeline,
             last_transcript,
             logs_path,
+            perf_enabled,
             selected_microphone,
             mic_sensitivity_percent,
             stop_rx,
@@ -1079,7 +1255,13 @@ fn phase1_feed_audio(
     let raw_transcript = pipeline.process_audio_chunk(&samples)?;
     drop(pipeline);
 
-    emit_transcript_if_fresh(&app, &logs.path, &store.last_transcript, raw_transcript)
+    emit_transcript_if_fresh(
+        &app,
+        &logs.path,
+        &store.last_transcript,
+        raw_transcript,
+        None,
+    )
 }
 
 #[cfg(all(test, feature = "desktop"))]
@@ -1196,6 +1378,7 @@ pub fn run() {
     let settings_path = settings_store::default_settings_path();
     let settings = settings_store::load_or_default(&settings_path);
     let logs_path = log_store::default_log_path();
+    let perf_enabled = is_perf_enabled_from_env();
     let recovery_path = recovery::default_checkpoint_path();
     let previous_checkpoint = recovery::load_or_default(&recovery_path);
     let now = recovery::current_unix_ms().unwrap_or(0);
@@ -1219,7 +1402,7 @@ pub fn run() {
         .manage(PipelineStore::new(initial_mode, initial_profile))
         .manage(SettingsState::new(settings, settings_path))
         .manage(InsertionState::default())
-        .manage(RuntimeLogState::new(logs_path))
+        .manage(RuntimeLogState::new(logs_path, perf_enabled))
         .manage(RecoveryState::new(recovery_path, current_checkpoint))
         .setup(|app| {
             let settings_state = app.state::<SettingsState>();
@@ -1251,6 +1434,16 @@ pub fn run() {
                         );
                     }
                 }
+            }
+
+            let logs_state = app.state::<RuntimeLogState>();
+            if logs_state.perf_enabled {
+                let _ = log_store::append(
+                    &logs_state.path,
+                    "info",
+                    "perf.enabled",
+                    "SONORA_PERF instrumentation enabled",
+                );
             }
 
             Ok(())
@@ -1290,6 +1483,7 @@ pub fn run() {
             phase4_get_runtime_logs,
             phase4_clear_runtime_logs,
             phase4_get_transcriber_status,
+            phase4_perf_mark_ui_transcript_received,
             phase4_get_recovery_checkpoint,
             phase4_acknowledge_recovery_notice,
             phase4_mark_clean_shutdown

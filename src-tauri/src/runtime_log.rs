@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,13 +37,13 @@ pub fn append(path: &Path, level: &str, event: &str, message: &str) -> Result<()
     })
     .map_err(|error| error.to_string())?;
 
-    let mut existing = String::new();
-    if let Ok(contents) = fs::read_to_string(path) {
-        existing = contents;
-    }
-    existing.push_str(&line);
-    existing.push('\n');
-    fs::write(path, existing).map_err(io_to_string)
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(io_to_string)?;
+    file.write_all(line.as_bytes()).map_err(io_to_string)?;
+    file.write_all(b"\n").map_err(io_to_string)
 }
 
 pub fn read_recent(path: &Path, limit: usize) -> Result<Vec<String>, String> {

@@ -45,6 +45,16 @@ export async function getTranscriberStatus(): Promise<TranscriberStatus> {
   return invoke<TranscriberStatus>("phase4_get_transcriber_status");
 }
 
+export async function markPerfTranscriptReceived(
+  chunkId: number,
+  emittedUnixMs: number,
+): Promise<void> {
+  return invoke<void>("phase4_perf_mark_ui_transcript_received", {
+    chunk_id: chunkId,
+    emitted_unix_ms: emittedUnixMs,
+  });
+}
+
 export async function getRecoveryCheckpoint(): Promise<RecoveryCheckpoint> {
   return invoke<RecoveryCheckpoint>("phase4_get_recovery_checkpoint");
 }

@@ -81,6 +81,57 @@ function hasNvidiaDriver() {
   return result.status === 0 && Boolean(result.stdout?.trim());
 }
 
+function resolveNvccPath() {
+  if (platform !== "win32") {
+    const result = spawnSync("which", ["nvcc"], {
+      encoding: "utf8",
+    });
+    if (result.status !== 0) {
+      return null;
+    }
+    const first = result.stdout
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .find((value) => value.length > 0);
+    return first ?? null;
+  }
+
+  const result = spawnSync("where", ["nvcc"], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  const first = result.stdout
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .find((value) => value.length > 0);
+  return first ?? null;
+}
+
+function resolveCudaToolkitRoot() {
+  const envCandidates = [process.env.CUDAToolkit_ROOT, process.env.CUDA_PATH]
+    .map((value) => (value ?? "").trim())
+    .filter((value) => value.length > 0);
+
+  for (const candidate of envCandidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const nvccPath = resolveNvccPath();
+  if (!nvccPath) {
+    return null;
+  }
+
+  const root = path.resolve(nvccPath, "..", "..");
+  if (!existsSync(root)) {
+    return null;
+  }
+  return root;
+}
+
 function parseBackend(value) {
   const normalized = (value ?? "").trim().toLowerCase();
   if (normalized === "") {
@@ -344,6 +395,21 @@ async function main() {
 
   if (backend === "cuda") {
     cmakeArgs.push("-DGGML_CUDA=ON");
+
+    const cudaToolkitRoot = resolveCudaToolkitRoot();
+    if (cudaToolkitRoot) {
+      cmakeArgs.push(`-DCUDAToolkit_ROOT=${cudaToolkitRoot}`);
+    }
+
+    if (platform === "win32") {
+      if (!process.env.CMAKE_GENERATOR) {
+        cmakeArgs.push("-G", "Visual Studio 17 2022");
+      }
+      cmakeArgs.push("-A", "x64");
+      if (cudaToolkitRoot) {
+        cmakeArgs.push("-T", `cuda=${cudaToolkitRoot}`);
+      }
+    }
   }
 
   runCommand("cmake", cmakeArgs);

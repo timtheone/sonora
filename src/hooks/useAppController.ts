@@ -33,6 +33,7 @@ import {
   acknowledgeRecoveryNotice,
   clearRuntimeLogs,
   getEnvironmentHealth,
+  markPerfTranscriptReceived,
   getRecoveryCheckpoint,
   getRuntimeLogs,
   getTranscriberStatus,
@@ -182,6 +183,16 @@ export function useAppController() {
       "dictation:transcript",
       (event) => {
         setRecentTranscripts((previous) => [event.payload.text, ...previous].slice(0, 3));
+        if (
+          typeof event.payload.chunk_id === "number" &&
+          typeof event.payload.emitted_unix_ms === "number"
+        ) {
+          markPerfTranscriptReceived(event.payload.chunk_id, event.payload.emitted_unix_ms).catch(
+            () => {
+              // noop
+            },
+          );
+        }
       },
     );
 

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::time::Instant;
 
 use crate::config::{DictationMode, ModelProfile};
 use crate::profile::{tuning_for_profile, ProfileTuning};
@@ -28,6 +29,16 @@ pub struct DictationPipeline<T: Transcriber> {
     tuning: ProfileTuning,
     vad_config: VadConfig,
     transcriber: T,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChunkProcessMetrics {
+    pub listening: bool,
+    pub enough_samples: bool,
+    pub had_speech: bool,
+    pub vad_ms: u64,
+    pub inference_ms: u64,
+    pub transcript: Option<String>,
 }
 
 impl<T: Transcriber> DictationPipeline<T> {
@@ -90,22 +101,47 @@ impl<T: Transcriber> DictationPipeline<T> {
     }
 
     pub fn process_audio_chunk(&mut self, samples: &[f32]) -> Result<Option<String>, String> {
-        if self.state != DictationState::Listening {
-            return Ok(None);
+        Ok(self.process_audio_chunk_profiled(samples)?.transcript)
+    }
+
+    pub fn process_audio_chunk_profiled(
+        &mut self,
+        samples: &[f32],
+    ) -> Result<ChunkProcessMetrics, String> {
+        let mut metrics = ChunkProcessMetrics {
+            listening: self.state == DictationState::Listening,
+            enough_samples: false,
+            had_speech: false,
+            vad_ms: 0,
+            inference_ms: 0,
+            transcript: None,
+        };
+
+        if !metrics.listening {
+            return Ok(metrics);
         }
 
         if samples.len() < self.tuning.min_chunk_samples {
-            return Ok(None);
+            return Ok(metrics);
         }
+        metrics.enough_samples = true;
 
-        if !has_speech(samples, &self.vad_config) {
-            return Ok(None);
+        let vad_started_at = Instant::now();
+        let has_voice = has_speech(samples, &self.vad_config);
+        metrics.vad_ms = vad_started_at.elapsed().as_millis() as u64;
+        metrics.had_speech = has_voice;
+
+        if !has_voice {
+            return Ok(metrics);
         }
 
         self.state = DictationState::Transcribing;
+        let inference_started_at = Instant::now();
         let transcript = self.transcriber.transcribe(samples)?;
+        metrics.inference_ms = inference_started_at.elapsed().as_millis() as u64;
         self.state = DictationState::Listening;
-        Ok(Some(transcript))
+        metrics.transcript = Some(transcript);
+        Ok(metrics)
     }
 }
 
@@ -221,5 +257,42 @@ mod tests {
         assert_eq!(before.model_profile, ModelProfile::Balanced);
         assert_eq!(after.model_profile, ModelProfile::Fast);
         assert!(after.tuning.min_chunk_samples < before.tuning.min_chunk_samples);
+    }
+
+    #[test]
+    fn profiled_processing_reports_skipped_when_not_listening() {
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Fast,
+            StubTranscriber,
+        );
+
+        let metrics = pipeline
+            .process_audio_chunk_profiled(&speech_chunk())
+            .expect("profiling call should succeed");
+
+        assert!(!metrics.listening);
+        assert!(!metrics.enough_samples);
+        assert!(!metrics.had_speech);
+        assert!(metrics.transcript.is_none());
+    }
+
+    #[test]
+    fn profiled_processing_reports_vad_and_inference_for_speech() {
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Fast,
+            StubTranscriber,
+        );
+        pipeline.on_hotkey_down();
+
+        let metrics = pipeline
+            .process_audio_chunk_profiled(&speech_chunk())
+            .expect("speech chunk profiling should succeed");
+
+        assert!(metrics.listening);
+        assert!(metrics.enough_samples);
+        assert!(metrics.had_speech);
+        assert!(metrics.transcript.is_some());
     }
 }

@@ -31,6 +31,24 @@ Run the Tauri app:
 pnpm tauri dev
 ```
 
+Run Tauri dev with profiling instrumentation enabled:
+
+```bash
+pnpm tauri:dev:profiling
+```
+
+Watch live perf traces in a table:
+
+```bash
+pnpm perf:watch
+```
+
+Optional custom log path:
+
+```bash
+pnpm perf:watch -- --path /absolute/path/to/runtime.log
+```
+
 Build frontend bundle:
 
 ```bash
@@ -130,6 +148,8 @@ pnpm tauri:build
 - Phase 4 adds environment health checks, transcript post-processing, and local runtime logs.
 - Phase 4 also adds recovery checkpoint tracking for dirty-shutdown detection.
 - Runtime transcriber now attempts whisper.cpp sidecar execution when binary + model are available.
+- Set `SONORA_PERF=1` to enable chunk-level perf trace events in runtime logs.
+- `pnpm perf:watch` reads those events and renders a live timing table (`capture/queue/VAD/inference/emit`).
 - UI includes a live mic capture test path (Web Audio -> 16 kHz feed into Rust dictation pipeline).
 - Model binaries are downloaded via `pnpm model:download` into `src-tauri/resources/models/`.
 - Sidecar binary is generated via `pnpm sidecar:setup` into `src-tauri/resources/bin/`.

@@ -17,6 +17,8 @@ export interface PipelineStatus {
 
 export interface TranscriptPayload {
   text: string;
+  chunk_id?: number;
+  emitted_unix_ms?: number;
 }
 
 export interface InputMicrophone {
