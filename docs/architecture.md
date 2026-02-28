@@ -22,7 +22,8 @@
 
 2. **AudioService (Rust)**
    - Phase 1: 16 kHz mono format contracts and sample helpers are in place.
-   - Planned next: live mic capture via `cpal`.
+   - Current test path: live microphone capture from UI via Web Audio API with 16 kHz downsampling fed to Rust pipeline.
+   - Planned next: move capture fully to Rust `cpal`.
 
 3. **VadService (Rust)**
    - Segments speech from silence.
@@ -30,8 +31,8 @@
 
 4. **TranscriptionService (Rust)**
    - Phase 1: transcriber abstraction and whisper.cpp sidecar argument builder are implemented.
-   - Current runtime uses stub transcriber for end-to-end command/event wiring.
-   - Planned next: invoke real whisper.cpp sidecar process.
+   - Current runtime supports whisper.cpp sidecar execution when model and sidecar binary are available.
+   - Includes runtime readiness diagnostics (resolved binary/model paths and fallback reasons).
 
 5. **ProfileService (Rust)**
    - Phase 3: detects hardware tier from logical CPU cores.
@@ -56,6 +57,11 @@
 
 10. **RuntimeLogService (Rust)**
    - Phase 4: writes local runtime logs and exposes commands for reading/clearing recent logs.
+
+11. **RecoveryService (Rust)**
+   - Phase 4: persists startup/shutdown checkpoint state.
+   - Flags recovery notice when previous session did not exit cleanly.
+   - Supports acknowledgement flow for recovery notice in UI.
 
 ## Dictation state machine
 
@@ -119,3 +125,9 @@ Mode rules:
 - `pnpm test`
 - `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features`
 - `pnpm build`
+
+## Packaging pipeline (Phase 5)
+
+- Multi-OS packaging workflow: `.github/workflows/package.yml`
+- Builds installers on `ubuntu-22.04`, `windows-latest`, and `macos-latest`
+- Runs tests before packaging and uploads bundle artifacts per OS

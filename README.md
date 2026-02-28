@@ -49,6 +49,26 @@ pnpm model:download balanced
 pnpm model:download fast
 ```
 
+Download/build whisper.cpp sidecar binary for current OS:
+
+```bash
+pnpm sidecar:setup
+```
+
+Force a clean re-clone + rebuild of sidecar:
+
+```bash
+pnpm sidecar:setup:force
+```
+
+Troubleshooting sidecar setup:
+
+- `ENOENT cmake`: install CMake and C/C++ build tools.
+  - Linux (Ubuntu/Debian): `sudo apt-get update && sudo apt-get install -y cmake build-essential`
+  - macOS: `brew install cmake` and `xcode-select --install`
+  - Windows: install CMake + Visual Studio C++ Build Tools
+- Build the sidecar on the same OS as the package target (Windows package expects `whisper-cli.exe`).
+
 ## Test commands
 
 TypeScript unit tests (Vitest):
@@ -81,6 +101,7 @@ Build installer/bundles (auto-downloads missing default models first):
 pnpm tauri:build
 ```
 
+
 ## Notes
 
 - This repository follows TDD for all new features.
@@ -89,4 +110,8 @@ pnpm tauri:build
 - Phase 2 currently includes insertion status/history plumbing; OS-native insertion adapters are next.
 - Phase 3 adds hardware profile detection and model path/profile status commands.
 - Phase 4 adds environment health checks, transcript post-processing, and local runtime logs.
+- Phase 4 also adds recovery checkpoint tracking for dirty-shutdown detection.
+- Runtime transcriber now attempts whisper.cpp sidecar execution when binary + model are available.
+- UI includes a live mic capture test path (Web Audio -> 16 kHz feed into Rust dictation pipeline).
 - Model binaries are downloaded via `pnpm model:download` into `src-tauri/resources/models/`.
+- Sidecar binary is generated via `pnpm sidecar:setup` into `src-tauri/resources/bin/`.

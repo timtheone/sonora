@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import { DEFAULT_SETTINGS } from "./domain/settings";
@@ -6,6 +6,7 @@ import {
   generateSilenceSamples,
   generateSpeechLikeSamples,
 } from "./domain/audio-chunk";
+import { downsampleTo16k } from "./domain/audio-resample";
 import { appendInsertionRecord } from "./domain/insertion-history";
 import {
   cancelPhase1,
@@ -34,10 +35,16 @@ import {
   type ModelStatus,
 } from "./services/phase3";
 import {
+  acknowledgeRecoveryNotice,
   clearRuntimeLogs,
   getEnvironmentHealth,
+  getRecoveryCheckpoint,
   getRuntimeLogs,
+  getTranscriberStatus,
+  markCleanShutdown,
   type EnvironmentHealth,
+  type RecoveryCheckpoint,
+  type TranscriberStatus,
 } from "./services/phase4";
 
 const FALLBACK_STATE: DictationState = "idle";
@@ -72,9 +79,19 @@ function App() {
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [environmentHealth, setEnvironmentHealth] =
     useState<EnvironmentHealth | null>(null);
+  const [recoveryCheckpoint, setRecoveryCheckpoint] =
+    useState<RecoveryCheckpoint | null>(null);
+  const [transcriberStatus, setTranscriberStatus] =
+    useState<TranscriberStatus | null>(null);
+  const [liveMicActive, setLiveMicActive] = useState(false);
   const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -91,6 +108,8 @@ function App() {
       getModelStatus(),
       getEnvironmentHealth(),
       getRuntimeLogs(30),
+      getRecoveryCheckpoint(),
+      getTranscriberStatus(),
     ])
       .then(
         ([
@@ -101,6 +120,8 @@ function App() {
           profileStatus,
           envHealth,
           logs,
+          recovery,
+          runtimeTranscriber,
         ]) => {
         setMode(phase1Status.mode);
         setState(phase1Status.state);
@@ -115,6 +136,8 @@ function App() {
         setModelStatus(profileStatus);
           setEnvironmentHealth(envHealth);
           setRuntimeLogs(logs);
+          setRecoveryCheckpoint(recovery);
+          setTranscriberStatus(runtimeTranscriber);
         },
       )
       .catch((cause) => {
@@ -122,6 +145,13 @@ function App() {
       });
 
     refreshMicrophones();
+
+    const onBeforeUnload = () => {
+      markCleanShutdown().catch(() => {
+        // noop
+      });
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
 
     const unlistenTranscript = listen<TranscriptPayload>(
       "dictation:transcript",
@@ -135,8 +165,10 @@ function App() {
     });
 
     return () => {
+      void stopLiveMicInternal();
       unlistenTranscript.then((dispose) => dispose());
       unlistenInsertion.then((dispose) => dispose());
+      window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, []);
 
@@ -230,8 +262,12 @@ function App() {
       setModelPathInput(updated.model_path ?? "");
       setSelectedMicrophoneId(updated.microphone_id ?? "");
       setLaunchAtStartup(updated.launch_at_startup);
-      const status = await getModelStatus();
+      const [status, runtimeTranscriber] = await Promise.all([
+        getModelStatus(),
+        getTranscriberStatus(),
+      ]);
       setModelStatus(status);
+      setTranscriberStatus(runtimeTranscriber);
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
     } catch (cause) {
@@ -260,6 +296,7 @@ function App() {
       setModelStatus(status);
       setModelProfile(updatedSettings.model_profile);
       setModelPathInput(updatedSettings.model_path ?? "");
+      setTranscriberStatus(await getTranscriberStatus());
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
     } catch (cause) {
@@ -271,8 +308,12 @@ function App() {
     try {
       const updated = await setModelPath(modelPath.trim() ? modelPath.trim() : null);
       setModelPathInput(updated.model_path ?? "");
-      const status = await getModelStatus();
+      const [status, runtimeTranscriber] = await Promise.all([
+        getModelStatus(),
+        getTranscriberStatus(),
+      ]);
       setModelStatus(status);
+      setTranscriberStatus(runtimeTranscriber);
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
     } catch (cause) {
@@ -282,12 +323,16 @@ function App() {
 
   async function refreshPhase4Health() {
     try {
-      const [envHealth, logs] = await Promise.all([
+      const [envHealth, logs, recovery, runtimeTranscriber] = await Promise.all([
         getEnvironmentHealth(),
         getRuntimeLogs(30),
+        getRecoveryCheckpoint(),
+        getTranscriberStatus(),
       ]);
       setEnvironmentHealth(envHealth);
       setRuntimeLogs(logs);
+      setRecoveryCheckpoint(recovery);
+      setTranscriberStatus(runtimeTranscriber);
       setError(null);
     } catch (cause) {
       setError(String(cause));
@@ -302,6 +347,20 @@ function App() {
     } catch (cause) {
       setError(String(cause));
     }
+  }
+
+  async function acknowledgeRecovery() {
+    try {
+      const checkpoint = await acknowledgeRecoveryNotice();
+      setRecoveryCheckpoint(checkpoint);
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+
+  async function clearErrorMessage() {
+    setError(null);
   }
 
   async function refreshMicrophones() {
@@ -328,6 +387,90 @@ function App() {
     }
   }
 
+  async function startLiveMic() {
+    if (!available || liveMicActive) {
+      return;
+    }
+
+    try {
+      const mediaConstraints: MediaStreamConstraints = selectedMicrophoneId
+        ? { audio: { deviceId: { exact: selectedMicrophoneId } } }
+        : { audio: true };
+
+      const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      let feeding = false;
+      processor.onaudioprocess = async (event) => {
+        if (!processorNodeRef.current || feeding) {
+          return;
+        }
+
+        const input = event.inputBuffer.getChannelData(0);
+        const downsampled = downsampleTo16k(input, audioContext.sampleRate);
+        if (downsampled.length === 0) {
+          return;
+        }
+
+        feeding = true;
+        try {
+          const transcript = await feedPhase1Audio(downsampled);
+          if (transcript) {
+            setRecentTranscripts((previous) => [transcript, ...previous].slice(0, 3));
+          }
+        } catch (cause) {
+          setError(String(cause));
+        } finally {
+          feeding = false;
+        }
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      mediaStreamRef.current = stream;
+      audioContextRef.current = audioContext;
+      sourceNodeRef.current = source;
+      processorNodeRef.current = processor;
+
+      const status = await sendPhase1HotkeyDown();
+      setState(status.state);
+      setLiveMicActive(true);
+      setError(null);
+    } catch (cause) {
+      await stopLiveMicInternal();
+      setError(String(cause));
+    }
+  }
+
+  async function stopLiveMic() {
+    await stopLiveMicInternal();
+    try {
+      const status = await cancelPhase1();
+      setState(status.state);
+    } catch {
+      // noop
+    }
+  }
+
+  async function stopLiveMicInternal() {
+    processorNodeRef.current?.disconnect();
+    sourceNodeRef.current?.disconnect();
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+
+    if (audioContextRef.current) {
+      await audioContextRef.current.close();
+    }
+
+    processorNodeRef.current = null;
+    sourceNodeRef.current = null;
+    mediaStreamRef.current = null;
+    audioContextRef.current = null;
+    setLiveMicActive(false);
+  }
+
   return (
     <main className="app">
       <h1>Sonora Dictation</h1>
@@ -335,11 +478,14 @@ function App() {
 
       <section className="panel">
         <h2>Phase 1 Controls</h2>
+        <p className="muted">Live mic: {liveMicActive ? "active" : "inactive"}</p>
         <div className="actions">
           <button disabled={!available} onClick={() => updateMode("push_to_toggle")}>Use Toggle Mode</button>
           <button disabled={!available} onClick={() => updateMode("push_to_talk")}>Use Push Mode</button>
           <button disabled={!available} onClick={onHotkeyDown}>Hotkey Down</button>
           <button disabled={!available} onClick={onHotkeyUp}>Hotkey Up</button>
+          <button disabled={!available || liveMicActive} onClick={startLiveMic}>Start Live Mic</button>
+          <button disabled={!available || !liveMicActive} onClick={stopLiveMic}>Stop Live Mic</button>
           <button disabled={!available} onClick={feedSilence}>Feed Silence Chunk</button>
           <button disabled={!available} onClick={feedSpeech}>Feed Speech Chunk</button>
           <button disabled={!available} onClick={onCancel}>Cancel</button>
@@ -494,6 +640,23 @@ function App() {
         ) : (
           <p>Environment health not loaded yet.</p>
         )}
+        {transcriberStatus ? (
+          <ul>
+            <li>Transcriber ready: {transcriberStatus.ready ? "yes" : "no"}</li>
+            <li>Transcriber: {transcriberStatus.description}</li>
+            <li>
+              Sidecar binary: {transcriberStatus.resolved_binary_path ?? "not resolved"}
+            </li>
+            <li>Resolved model: {transcriberStatus.resolved_model_path}</li>
+            <li>Model exists: {transcriberStatus.model_exists ? "yes" : "no"}</li>
+            <li>Tried binary paths:</li>
+            {transcriberStatus.checked_binary_paths.map((path, index) => (
+              <li key={`binary-path-${index}`}>{path}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>Transcriber status not loaded yet.</p>
+        )}
         <div className="actions">
           <button disabled={!available} onClick={refreshPhase4Health}>Refresh Health + Logs</button>
           <button disabled={!available} onClick={clearLogs}>Clear Logs</button>
@@ -537,7 +700,29 @@ function App() {
         )}
       </section>
 
-      {error ? <p className="error">Error: {error}</p> : null}
+      <section className="panel">
+        <h2>Phase 4 Recovery Status</h2>
+        {recoveryCheckpoint ? (
+          <ul>
+            <li>Clean shutdown last session: {recoveryCheckpoint.clean_shutdown ? "yes" : "no"}</li>
+            <li>Recovery notice pending: {recoveryCheckpoint.recovery_notice_pending ? "yes" : "no"}</li>
+            <li>Launch count: {recoveryCheckpoint.launch_count}</li>
+          </ul>
+        ) : (
+          <p>Recovery checkpoint not loaded yet.</p>
+        )}
+        <div className="actions">
+          <button disabled={!available} onClick={acknowledgeRecovery}>Acknowledge Recovery Notice</button>
+          <button disabled={!available} onClick={refreshPhase4Health}>Refresh Recovery State</button>
+        </div>
+      </section>
+
+      {error ? (
+        <div className="error-block">
+          <p className="error">Error: {error}</p>
+          <button onClick={clearErrorMessage}>Clear Error</button>
+        </div>
+      ) : null}
     </main>
   );
 }

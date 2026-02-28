@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build && pnpm model:download",
+    "beforeBuildCommand": "pnpm build && pnpm model:download && pnpm sidecar:setup",
     "frontendDist": "../dist"
   },
   "app": {
@@ -25,7 +25,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/models/*"
+      "resources/models/*",
+      "resources/bin/*"
     ],
     "icon": [
       "icons/32x32.png",

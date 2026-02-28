@@ -61,6 +61,10 @@ impl<T: Transcriber> DictationPipeline<T> {
         self.tuning = tuning_for_profile(model_profile);
     }
 
+    pub fn set_transcriber(&mut self, transcriber: T) {
+        self.transcriber = transcriber;
+    }
+
     pub fn on_hotkey_down(&mut self) {
         match self.state {
             DictationState::Idle => {
