@@ -11,6 +11,9 @@ function Phase2SettingsPanelComponent() {
     modelPath,
     selectedMicrophoneId,
     micSensitivityPercent,
+    chunkDurationMs,
+    partialCadenceMs,
+    whisperBackendPreference,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -21,6 +24,9 @@ function Phase2SettingsPanelComponent() {
     setModelPathInput,
     setSelectedMicrophoneId,
     setMicSensitivityPercent,
+    setChunkDurationMs,
+    setPartialCadenceMs,
+    setWhisperBackendPreference,
     setClipboardFallback,
     setLaunchAtStartup,
     saveSettings,
@@ -117,6 +123,44 @@ function Phase2SettingsPanelComponent() {
           value={micSensitivityPercent}
           onChange={(event) => setMicSensitivityPercent(Number(event.currentTarget.value))}
         />
+      </label>
+      <label className="field">
+        <span>Chunk duration ({chunkDurationMs} ms)</span>
+        <input
+          type="range"
+          min={500}
+          max={4000}
+          step={50}
+          disabled={!available}
+          value={chunkDurationMs}
+          onChange={(event) => setChunkDurationMs(Number(event.currentTarget.value))}
+        />
+      </label>
+      <label className="field">
+        <span>Partial cadence ({partialCadenceMs} ms)</span>
+        <input
+          type="range"
+          min={300}
+          max={2500}
+          step={50}
+          disabled={!available}
+          value={partialCadenceMs}
+          onChange={(event) => setPartialCadenceMs(Number(event.currentTarget.value))}
+        />
+      </label>
+      <label className="field">
+        <span>Inference backend</span>
+        <select
+          disabled={!available}
+          value={whisperBackendPreference}
+          onChange={(event) =>
+            setWhisperBackendPreference(event.currentTarget.value as "auto" | "cpu" | "cuda")
+          }
+        >
+          <option value="auto">Auto detect (recommended)</option>
+          <option value="cuda">CUDA (NVIDIA GPU)</option>
+          <option value="cpu">CPU only</option>
+        </select>
       </label>
       <div className="actions">
         <button disabled={!available} onClick={saveSettings}>

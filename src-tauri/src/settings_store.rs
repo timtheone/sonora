@@ -1,4 +1,5 @@
-use crate::config::{AppSettings, DictationMode, ModelProfile};
+use crate::config::{AppSettings, DictationMode, ModelProfile, WhisperBackendPreference};
+use crate::profile::{clamp_chunk_duration_ms, clamp_partial_cadence_ms};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -12,6 +13,9 @@ pub struct AppSettingsPatch {
     pub model_path: Option<Option<String>>,
     pub microphone_id: Option<Option<String>>,
     pub mic_sensitivity_percent: Option<u16>,
+    pub chunk_duration_ms: Option<u16>,
+    pub partial_cadence_ms: Option<u16>,
+    pub whisper_backend_preference: Option<WhisperBackendPreference>,
     pub clipboard_fallback: Option<bool>,
     pub launch_at_startup: Option<bool>,
 }
@@ -59,6 +63,11 @@ pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettin
             .mic_sensitivity_percent
             .map(|value| value.clamp(50, 300))
             .unwrap_or(settings.mic_sensitivity_percent),
+        chunk_duration_ms: patch.chunk_duration_ms.or(settings.chunk_duration_ms),
+        partial_cadence_ms: patch.partial_cadence_ms.or(settings.partial_cadence_ms),
+        whisper_backend_preference: patch
+            .whisper_backend_preference
+            .unwrap_or(settings.whisper_backend_preference),
         clipboard_fallback: patch
             .clipboard_fallback
             .unwrap_or(settings.clipboard_fallback),
@@ -70,6 +79,8 @@ pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettin
 
 fn normalize_settings(mut settings: AppSettings) -> AppSettings {
     settings.mic_sensitivity_percent = settings.mic_sensitivity_percent.clamp(50, 300);
+    settings.chunk_duration_ms = settings.chunk_duration_ms.map(clamp_chunk_duration_ms);
+    settings.partial_cadence_ms = settings.partial_cadence_ms.map(clamp_partial_cadence_ms);
     settings
 }
 
@@ -102,6 +113,9 @@ mod tests {
                 model_path: Some(Some("models/custom.bin".to_string())),
                 microphone_id: Some(Some("mic-2".to_string())),
                 mic_sensitivity_percent: Some(185),
+                chunk_duration_ms: Some(1_600),
+                partial_cadence_ms: Some(700),
+                whisper_backend_preference: Some(WhisperBackendPreference::Cuda),
                 clipboard_fallback: Some(false),
                 launch_at_startup: Some(true),
             },
@@ -114,6 +128,12 @@ mod tests {
         assert_eq!(updated.model_path.as_deref(), Some("models/custom.bin"));
         assert_eq!(updated.microphone_id, Some("mic-2".to_string()));
         assert_eq!(updated.mic_sensitivity_percent, 185);
+        assert_eq!(updated.chunk_duration_ms, Some(1_600));
+        assert_eq!(updated.partial_cadence_ms, Some(700));
+        assert_eq!(
+            updated.whisper_backend_preference,
+            WhisperBackendPreference::Cuda
+        );
         assert!(!updated.clipboard_fallback);
         assert!(updated.launch_at_startup);
     }
@@ -150,6 +170,22 @@ mod tests {
     }
 
     #[test]
+    fn clamps_chunk_and_cadence_patch() {
+        let defaults = AppSettings::default();
+        let updated = apply_patch(
+            &defaults,
+            AppSettingsPatch {
+                chunk_duration_ms: Some(100),
+                partial_cadence_ms: Some(9_000),
+                ..AppSettingsPatch::default()
+            },
+        );
+
+        assert_eq!(updated.chunk_duration_ms, Some(500));
+        assert_eq!(updated.partial_cadence_ms, Some(2_500));
+    }
+
+    #[test]
     fn persists_and_loads_settings() {
         let path = temp_file("settings");
         let settings = AppSettings {
@@ -160,6 +196,9 @@ mod tests {
             model_path: Some("models/ggml-tiny.en-q8_0.bin".to_string()),
             microphone_id: None,
             mic_sensitivity_percent: 165,
+            chunk_duration_ms: Some(1_200),
+            partial_cadence_ms: Some(600),
+            whisper_backend_preference: WhisperBackendPreference::Cpu,
             clipboard_fallback: true,
             launch_at_startup: false,
         };
@@ -183,10 +222,14 @@ mod tests {
         let path = temp_file("normalize");
         let mut settings = AppSettings::default();
         settings.mic_sensitivity_percent = 999;
+        settings.chunk_duration_ms = Some(100);
+        settings.partial_cadence_ms = Some(9_000);
 
         save(&path, &settings).expect("settings should be saved");
         let loaded = load_or_default(&path);
         assert_eq!(loaded.mic_sensitivity_percent, 300);
+        assert_eq!(loaded.chunk_duration_ms, Some(500));
+        assert_eq!(loaded.partial_cadence_ms, Some(2_500));
 
         let _ = fs::remove_file(path);
     }

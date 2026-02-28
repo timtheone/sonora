@@ -25,8 +25,8 @@ use pipeline::{DictationPipeline, PipelineStatus};
 use postprocess::{is_duplicate_transcript, normalize_transcript};
 #[cfg(feature = "desktop")]
 use profile::{
-    build_model_status, detect_hardware_tier, recommended_profile_for_tier, HardwareTier,
-    ModelStatus,
+    build_model_status, detect_hardware_tier, recommended_profile_for_tier, tuning_for_settings,
+    HardwareTier, ModelStatus,
 };
 #[cfg(feature = "desktop")]
 use recovery::RecoveryCheckpoint;
@@ -66,15 +66,18 @@ struct PipelineStore {
 
 #[cfg(feature = "desktop")]
 impl PipelineStore {
-    fn new(mode: DictationMode, model_profile: ModelProfile) -> Self {
+    fn new(settings: &AppSettings) -> Self {
+        let mut pipeline = DictationPipeline::new(
+            settings.mode,
+            settings.model_profile,
+            RuntimeTranscriber::Unavailable {
+                reason: "transcriber not initialized".to_string(),
+            },
+        );
+        pipeline.set_tuning(tuning_for_settings(settings));
+
         Self {
-            pipeline: Arc::new(Mutex::new(DictationPipeline::new(
-                mode,
-                model_profile,
-                RuntimeTranscriber::Unavailable {
-                    reason: "transcriber not initialized".to_string(),
-                },
-            ))),
+            pipeline: Arc::new(Mutex::new(pipeline)),
             last_transcript: Arc::new(Mutex::new(None)),
             live_capture: Mutex::new(None),
         }
@@ -353,6 +356,7 @@ fn build_transcriber_status(app: &tauri::AppHandle, settings: &AppSettings) -> T
         &settings.language,
         settings.model_profile,
         model_path.clone(),
+        settings.whisper_backend_preference,
         resource_dir.as_deref(),
     );
 
@@ -381,6 +385,7 @@ fn apply_runtime_transcriber_from_settings(
         &settings.language,
         settings.model_profile,
         model_path,
+        settings.whisper_backend_preference,
         resource_dir.as_deref(),
     );
 
@@ -388,6 +393,8 @@ fn apply_runtime_transcriber_from_settings(
         .pipeline
         .lock()
         .map_err(|_| "failed to acquire pipeline state".to_string())?;
+    pipeline.set_model_profile(settings.model_profile);
+    pipeline.set_tuning(tuning_for_settings(settings));
     pipeline.set_transcriber(runtime);
 
     Ok(build_transcriber_status(app, settings))
@@ -548,7 +555,6 @@ fn phase2_update_settings(
             .lock()
             .map_err(|_| "failed to acquire pipeline state".to_string())?;
         pipeline.set_mode(updated.mode);
-        pipeline.set_model_profile(updated.model_profile);
     }
     apply_runtime_transcriber_from_settings(&app, &updated, &pipeline_state)?;
 
@@ -1395,11 +1401,10 @@ pub fn run() {
         );
     }
 
-    let initial_mode = settings.mode;
-    let initial_profile = settings.model_profile;
+    let pipeline_store = PipelineStore::new(&settings);
 
     tauri::Builder::default()
-        .manage(PipelineStore::new(initial_mode, initial_profile))
+        .manage(pipeline_store)
         .manage(SettingsState::new(settings, settings_path))
         .manage(InsertionState::default())
         .manage(RuntimeLogState::new(logs_path, perf_enabled))

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, normalizeSettings } from "./settings";
+import {
+  DEFAULT_SETTINGS,
+  effectiveChunkDurationMs,
+  effectivePartialCadenceMs,
+  normalizeSettings,
+} from "./settings";
 
 describe("settings", () => {
   it("returns defaults when no settings are provided", () => {
@@ -33,5 +38,19 @@ describe("settings", () => {
     expect(normalizeSettings({ micSensitivityPercent: 20 }).micSensitivityPercent).toBe(50);
     expect(normalizeSettings({ micSensitivityPercent: 190 }).micSensitivityPercent).toBe(190);
     expect(normalizeSettings({ micSensitivityPercent: 500 }).micSensitivityPercent).toBe(300);
+  });
+
+  it("uses model defaults for missing latency tuning", () => {
+    expect(effectiveChunkDurationMs("balanced", null)).toBe(2000);
+    expect(effectiveChunkDurationMs("fast", null)).toBe(1000);
+    expect(effectivePartialCadenceMs("balanced", null)).toBe(1400);
+    expect(effectivePartialCadenceMs("fast", null)).toBe(900);
+  });
+
+  it("clamps latency tuning overrides", () => {
+    expect(effectiveChunkDurationMs("balanced", 200)).toBe(500);
+    expect(effectiveChunkDurationMs("balanced", 5000)).toBe(4000);
+    expect(effectivePartialCadenceMs("balanced", 100)).toBe(300);
+    expect(effectivePartialCadenceMs("balanced", 3000)).toBe(2500);
   });
 });

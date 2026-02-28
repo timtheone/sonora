@@ -148,6 +148,8 @@ pnpm tauri:build
 - Phase 4 adds environment health checks, transcript post-processing, and local runtime logs.
 - Phase 4 also adds recovery checkpoint tracking for dirty-shutdown detection.
 - Runtime transcriber now attempts whisper.cpp sidecar execution when binary + model are available.
+- Settings UI includes latency tuning controls (chunk duration + partial cadence) for live experimentation.
+- Settings UI includes inference backend preference (`auto`/`cpu`/`cuda`) so GPU usage can be toggled without env vars.
 - Set `SONORA_PERF=1` to enable chunk-level perf trace events in runtime logs.
 - `pnpm perf:watch` reads those events and renders a live timing table (`capture/queue/VAD/inference/emit`).
 - UI includes a live mic capture test path (Web Audio -> 16 kHz feed into Rust dictation pipeline).

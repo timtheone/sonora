@@ -69,7 +69,10 @@ impl<T: Transcriber> DictationPipeline<T> {
 
     pub fn set_model_profile(&mut self, model_profile: ModelProfile) {
         self.model_profile = model_profile;
-        self.tuning = tuning_for_profile(model_profile);
+    }
+
+    pub fn set_tuning(&mut self, tuning: ProfileTuning) {
+        self.tuning = tuning;
     }
 
     pub fn set_transcriber(&mut self, transcriber: T) {
@@ -256,7 +259,25 @@ mod tests {
 
         assert_eq!(before.model_profile, ModelProfile::Balanced);
         assert_eq!(after.model_profile, ModelProfile::Fast);
-        assert!(after.tuning.min_chunk_samples < before.tuning.min_chunk_samples);
+        assert_eq!(after.tuning, before.tuning);
+    }
+
+    #[test]
+    fn set_tuning_overrides_chunk_timing() {
+        let mut pipeline = DictationPipeline::new(
+            DictationMode::PushToToggle,
+            ModelProfile::Balanced,
+            StubTranscriber,
+        );
+
+        pipeline.set_tuning(ProfileTuning {
+            min_chunk_samples: 8_000,
+            partial_cadence_ms: 450,
+        });
+
+        let status = pipeline.status();
+        assert_eq!(status.tuning.min_chunk_samples, 8_000);
+        assert_eq!(status.tuning.partial_cadence_ms, 450);
     }
 
     #[test]

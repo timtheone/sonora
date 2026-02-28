@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DictationMode } from "./phase1";
 
+export type WhisperBackendPreference = "auto" | "cpu" | "cuda";
+
 export interface AppSettings {
   hotkey: string;
   mode: DictationMode;
@@ -9,6 +11,9 @@ export interface AppSettings {
   model_path: string | null;
   microphone_id: string | null;
   mic_sensitivity_percent: number;
+  chunk_duration_ms: number | null;
+  partial_cadence_ms: number | null;
+  whisper_backend_preference: WhisperBackendPreference;
   clipboard_fallback: boolean;
   launch_at_startup: boolean;
 }
@@ -20,6 +25,9 @@ export interface AppSettingsPatch {
   model_path?: string | null;
   microphone_id?: string | null;
   mic_sensitivity_percent?: number;
+  chunk_duration_ms?: number;
+  partial_cadence_ms?: number;
+  whisper_backend_preference?: WhisperBackendPreference;
   clipboard_fallback?: boolean;
   launch_at_startup?: boolean;
 }

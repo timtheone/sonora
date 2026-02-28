@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::config::ModelProfile;
+use crate::config::{ModelProfile, WhisperBackendPreference};
 use serde::Deserialize;
 
 #[cfg(target_os = "windows")]
@@ -50,13 +50,6 @@ impl WhisperComputeBackend {
             WhisperComputeBackend::Cuda => "cuda",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WhisperBackendPreference {
-    Auto,
-    Cpu,
-    Cuda,
 }
 
 #[derive(Debug, Deserialize)]
@@ -221,6 +214,7 @@ pub fn build_runtime_transcriber(
     language: &str,
     model_profile: ModelProfile,
     model_path: PathBuf,
+    backend_preference: WhisperBackendPreference,
     resource_dir: Option<&Path>,
 ) -> RuntimeTranscriber {
     let binary = resolve_binary_path(resource_dir);
@@ -237,7 +231,7 @@ pub fn build_runtime_transcriber(
         };
     };
 
-    let compute_backend = resolve_compute_backend(&binary_path);
+    let compute_backend = resolve_compute_backend(&binary_path, backend_preference);
 
     RuntimeTranscriber::Whisper(WhisperSidecarTranscriber {
         config: WhisperSidecarConfig {
@@ -261,11 +255,16 @@ fn recommended_threads(profile: ModelProfile) -> usize {
     }
 }
 
-fn resolve_compute_backend(binary_path: &Path) -> WhisperComputeBackend {
-    match parse_backend_preference(std::env::var(BACKEND_ENV_NAME).ok().as_deref()) {
-        Some(WhisperBackendPreference::Cpu) => WhisperComputeBackend::Cpu,
-        Some(WhisperBackendPreference::Cuda) => WhisperComputeBackend::Cuda,
-        Some(WhisperBackendPreference::Auto) | None => {
+fn resolve_compute_backend(
+    binary_path: &Path,
+    backend_preference: WhisperBackendPreference,
+) -> WhisperComputeBackend {
+    match parse_backend_preference(std::env::var(BACKEND_ENV_NAME).ok().as_deref())
+        .unwrap_or(backend_preference)
+    {
+        WhisperBackendPreference::Cpu => WhisperComputeBackend::Cpu,
+        WhisperBackendPreference::Cuda => WhisperComputeBackend::Cuda,
+        WhisperBackendPreference::Auto => {
             if let Some(metadata_backend) = read_metadata_backend(binary_path) {
                 metadata_backend
             } else if has_nvidia_gpu() {
@@ -299,12 +298,18 @@ fn read_metadata_backend(binary_path: &Path) -> Option<WhisperComputeBackend> {
     let metadata_path = metadata_path_for_binary(binary_path)?;
     let raw = fs::read_to_string(metadata_path).ok()?;
     let parsed = serde_json::from_str::<WhisperSidecarMetadata>(&raw).ok()?;
-    parse_backend_preference(parsed.backend.as_deref()).map(|preference| match preference {
+    parse_backend_preference(parsed.backend.as_deref()).map(map_preference_to_compute_backend)
+}
+
+fn map_preference_to_compute_backend(
+    preference: WhisperBackendPreference,
+) -> WhisperComputeBackend {
+    match preference {
         WhisperBackendPreference::Cuda => WhisperComputeBackend::Cuda,
         WhisperBackendPreference::Cpu | WhisperBackendPreference::Auto => {
             WhisperComputeBackend::Cpu
         }
-    })
+    }
 }
 
 fn has_nvidia_gpu() -> bool {
@@ -500,11 +505,21 @@ mod tests {
     }
 
     #[test]
+    fn maps_explicit_backend_preferences_without_auto_detection() {
+        let cpu = map_preference_to_compute_backend(WhisperBackendPreference::Cpu);
+        let cuda = map_preference_to_compute_backend(WhisperBackendPreference::Cuda);
+
+        assert_eq!(cpu, WhisperComputeBackend::Cpu);
+        assert_eq!(cuda, WhisperComputeBackend::Cuda);
+    }
+
+    #[test]
     fn resolves_runtime_transcriber_as_unavailable_for_missing_model() {
         let transcriber = build_runtime_transcriber(
             "en",
             ModelProfile::Balanced,
             PathBuf::from("./missing.bin"),
+            WhisperBackendPreference::Auto,
             Some(Path::new("/tmp/resources")),
         );
 

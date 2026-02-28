@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { DEFAULT_SETTINGS } from "../domain/settings";
+import {
+  CHUNK_DURATION_MAX_MS,
+  CHUNK_DURATION_MIN_MS,
+  DEFAULT_SETTINGS,
+  PARTIAL_CADENCE_MAX_MS,
+  PARTIAL_CADENCE_MIN_MS,
+  effectiveChunkDurationMs,
+  effectivePartialCadenceMs,
+} from "../domain/settings";
 import { appendInsertionRecord } from "../domain/insertion-history";
 import {
   cancelPhase1,
@@ -66,6 +74,12 @@ export function useAppController() {
   const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string>("");
   const [micSensitivityPercent, setMicSensitivityPercent] =
     useState<number>(DEFAULT_SETTINGS.micSensitivityPercent);
+  const [chunkDurationMs, setChunkDurationMs] =
+    useState<number>(DEFAULT_SETTINGS.chunkDurationMs);
+  const [partialCadenceMs, setPartialCadenceMs] =
+    useState<number>(DEFAULT_SETTINGS.partialCadenceMs);
+  const [whisperBackendPreference, setWhisperBackendPreference] =
+    useState<"auto" | "cpu" | "cuda">(DEFAULT_SETTINGS.whisperBackendPreference);
   const [availableMicrophones, setAvailableMicrophones] = useState<
     Array<{ id: string; label: string }>
   >([]);
@@ -155,6 +169,13 @@ export function useAppController() {
           setModelPathInput(settings.model_path ?? "");
           setSelectedMicrophoneId(settings.microphone_id ?? "");
           setMicSensitivityPercent(settings.mic_sensitivity_percent);
+          setChunkDurationMs(
+            effectiveChunkDurationMs(settings.model_profile, settings.chunk_duration_ms),
+          );
+          setPartialCadenceMs(
+            effectivePartialCadenceMs(settings.model_profile, settings.partial_cadence_ms),
+          );
+          setWhisperBackendPreference(settings.whisper_backend_preference);
           setClipboardFallback(settings.clipboard_fallback);
           setLaunchAtStartup(settings.launch_at_startup);
           setInsertions(recentInsertions);
@@ -264,6 +285,15 @@ export function useAppController() {
         model_path: modelPath.trim() ? modelPath.trim() : null,
         microphone_id: selectedMicrophoneId.trim() ? selectedMicrophoneId : null,
         mic_sensitivity_percent: Math.max(50, Math.min(300, Math.round(micSensitivityPercent))),
+        chunk_duration_ms: Math.max(
+          CHUNK_DURATION_MIN_MS,
+          Math.min(CHUNK_DURATION_MAX_MS, Math.round(chunkDurationMs)),
+        ),
+        partial_cadence_ms: Math.max(
+          PARTIAL_CADENCE_MIN_MS,
+          Math.min(PARTIAL_CADENCE_MAX_MS, Math.round(partialCadenceMs)),
+        ),
+        whisper_backend_preference: whisperBackendPreference,
         clipboard_fallback: clipboardFallback,
         launch_at_startup: launchAtStartup,
       });
@@ -274,6 +304,11 @@ export function useAppController() {
       setModelPathInput(updated.model_path ?? "");
       setSelectedMicrophoneId(updated.microphone_id ?? "");
       setMicSensitivityPercent(updated.mic_sensitivity_percent);
+      setChunkDurationMs(effectiveChunkDurationMs(updated.model_profile, updated.chunk_duration_ms));
+      setPartialCadenceMs(
+        effectivePartialCadenceMs(updated.model_profile, updated.partial_cadence_ms),
+      );
+      setWhisperBackendPreference(updated.whisper_backend_preference);
       setLaunchAtStartup(updated.launch_at_startup);
       const [status, runtimeTranscriber] = await Promise.all([
         getModelStatus(),
@@ -309,6 +344,13 @@ export function useAppController() {
       setModelStatus(status);
       setModelProfile(updatedSettings.model_profile);
       setModelPathInput(updatedSettings.model_path ?? "");
+      setChunkDurationMs(
+        effectiveChunkDurationMs(updatedSettings.model_profile, updatedSettings.chunk_duration_ms),
+      );
+      setPartialCadenceMs(
+        effectivePartialCadenceMs(updatedSettings.model_profile, updatedSettings.partial_cadence_ms),
+      );
+      setWhisperBackendPreference(updatedSettings.whisper_backend_preference);
       setTranscriberStatus(await getTranscriberStatus());
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
@@ -392,6 +434,9 @@ export function useAppController() {
     modelPath,
     selectedMicrophoneId,
     micSensitivityPercent,
+    chunkDurationMs,
+    partialCadenceMs,
+    whisperBackendPreference,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -409,6 +454,9 @@ export function useAppController() {
     setModelPathInput,
     setSelectedMicrophoneId,
     setMicSensitivityPercent,
+    setChunkDurationMs,
+    setPartialCadenceMs,
+    setWhisperBackendPreference,
     setClipboardFallback,
     setLaunchAtStartup,
     updateMode,

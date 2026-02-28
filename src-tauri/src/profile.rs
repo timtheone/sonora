@@ -17,6 +17,12 @@ pub struct ProfileTuning {
     pub partial_cadence_ms: u64,
 }
 
+pub const CHUNK_DURATION_MS_MIN: u16 = 500;
+pub const CHUNK_DURATION_MS_MAX: u16 = 4_000;
+pub const PARTIAL_CADENCE_MS_MIN: u16 = 300;
+pub const PARTIAL_CADENCE_MS_MAX: u16 = 2_500;
+const SAMPLE_RATE_HZ: usize = 16_000;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ModelStatus {
     pub profile: ModelProfile,
@@ -52,6 +58,49 @@ pub fn tuning_for_profile(profile: ModelProfile) -> ProfileTuning {
             min_chunk_samples: 32_000,
             partial_cadence_ms: 1_400,
         },
+    }
+}
+
+pub fn default_chunk_duration_ms_for_profile(profile: ModelProfile) -> u16 {
+    let tuning = tuning_for_profile(profile);
+    ((tuning.min_chunk_samples as u64 * 1_000) / SAMPLE_RATE_HZ as u64) as u16
+}
+
+pub fn default_partial_cadence_ms_for_profile(profile: ModelProfile) -> u16 {
+    tuning_for_profile(profile).partial_cadence_ms as u16
+}
+
+pub fn clamp_chunk_duration_ms(value: u16) -> u16 {
+    value.clamp(CHUNK_DURATION_MS_MIN, CHUNK_DURATION_MS_MAX)
+}
+
+pub fn clamp_partial_cadence_ms(value: u16) -> u16 {
+    value.clamp(PARTIAL_CADENCE_MS_MIN, PARTIAL_CADENCE_MS_MAX)
+}
+
+pub fn effective_chunk_duration_ms(settings: &AppSettings) -> u16 {
+    settings
+        .chunk_duration_ms
+        .map(clamp_chunk_duration_ms)
+        .unwrap_or_else(|| default_chunk_duration_ms_for_profile(settings.model_profile))
+}
+
+pub fn effective_partial_cadence_ms(settings: &AppSettings) -> u16 {
+    settings
+        .partial_cadence_ms
+        .map(clamp_partial_cadence_ms)
+        .unwrap_or_else(|| default_partial_cadence_ms_for_profile(settings.model_profile))
+}
+
+pub fn tuning_for_settings(settings: &AppSettings) -> ProfileTuning {
+    let chunk_duration_ms = effective_chunk_duration_ms(settings);
+    let partial_cadence_ms = effective_partial_cadence_ms(settings);
+    let min_chunk_samples =
+        ((SAMPLE_RATE_HZ as u64 * chunk_duration_ms as u64) / 1_000).max(8_000) as usize;
+
+    ProfileTuning {
+        min_chunk_samples,
+        partial_cadence_ms: partial_cadence_ms as u64,
     }
 }
 
@@ -228,5 +277,33 @@ mod tests {
 
         assert!(fast.min_chunk_samples < balanced.min_chunk_samples);
         assert!(fast.partial_cadence_ms < balanced.partial_cadence_ms);
+    }
+
+    #[test]
+    fn tuning_for_settings_uses_profile_defaults_without_overrides() {
+        let settings = AppSettings {
+            model_profile: ModelProfile::Fast,
+            chunk_duration_ms: None,
+            partial_cadence_ms: None,
+            ..AppSettings::default()
+        };
+
+        let tuning = tuning_for_settings(&settings);
+        assert_eq!(tuning.min_chunk_samples, 16_000);
+        assert_eq!(tuning.partial_cadence_ms, 900);
+    }
+
+    #[test]
+    fn tuning_for_settings_clamps_override_values() {
+        let settings = AppSettings {
+            model_profile: ModelProfile::Balanced,
+            chunk_duration_ms: Some(200),
+            partial_cadence_ms: Some(9_000),
+            ..AppSettings::default()
+        };
+
+        let tuning = tuning_for_settings(&settings);
+        assert_eq!(tuning.min_chunk_samples, 8_000);
+        assert_eq!(tuning.partial_cadence_ms, 2_500);
     }
 }
