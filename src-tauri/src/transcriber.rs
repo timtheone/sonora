@@ -271,6 +271,7 @@ impl FasterWhisperSidecarTranscriber {
     }
 
     fn send_request(&self, request: FasterWhisperRequest) -> Result<String, String> {
+        let request_id = request.id.clone();
         let mut guard = self
             .worker
             .lock()
@@ -299,19 +300,50 @@ impl FasterWhisperSidecarTranscriber {
             .flush()
             .map_err(|error| format!("failed to flush faster-whisper request: {error}"))?;
 
-        let mut line = String::new();
-        let bytes_read = worker
-            .stdout
-            .read_line(&mut line)
-            .map_err(|error| format!("failed to read faster-whisper response: {error}"))?;
+        let mut response = None;
+        let mut non_json_lines = Vec::<String>::new();
+        for _ in 0..64 {
+            let mut line = String::new();
+            let bytes_read = worker
+                .stdout
+                .read_line(&mut line)
+                .map_err(|error| format!("failed to read faster-whisper response: {error}"))?;
 
-        if bytes_read == 0 {
-            *guard = None;
-            return Err("faster-whisper worker closed stdout unexpectedly".to_string());
+            if bytes_read == 0 {
+                *guard = None;
+                return Err("faster-whisper worker closed stdout unexpectedly".to_string());
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<FasterWhisperResponse>(trimmed) {
+                Ok(parsed) => {
+                    if parsed.id.as_deref() == Some(request_id.as_str()) {
+                        response = Some(parsed);
+                        break;
+                    }
+                }
+                Err(_) => {
+                    if non_json_lines.len() < 3 {
+                        non_json_lines.push(trimmed.to_string());
+                    }
+                }
+            }
         }
 
-        let response = serde_json::from_str::<FasterWhisperResponse>(line.trim())
-            .map_err(|error| format!("invalid faster-whisper response: {error}"))?;
+        let response = response.ok_or_else(|| {
+            if non_json_lines.is_empty() {
+                "did not receive matching faster-whisper JSON response".to_string()
+            } else {
+                format!(
+                    "did not receive matching faster-whisper JSON response (worker output: {})",
+                    non_json_lines.join(" | ")
+                )
+            }
+        })?;
 
         if !response.ok {
             return Err(response
@@ -356,6 +388,7 @@ struct FasterWhisperRequest {
 
 #[derive(Debug, Deserialize)]
 struct FasterWhisperResponse {
+    id: Option<String>,
     ok: bool,
     text: Option<String>,
     error: Option<String>,

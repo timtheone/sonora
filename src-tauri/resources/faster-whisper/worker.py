@@ -63,7 +63,6 @@ def handle_transcribe(runtime: ModelRuntime, request: dict):
         language=language,
         beam_size=beam_size,
         condition_on_previous_text=False,
-        without_timestamps=True,
         vad_filter=False,
     )
     pieces = []
@@ -104,6 +103,11 @@ def handle_preload(runtime: ModelRuntime, request: dict):
     )
 
 
+def handle_ping(request: dict):
+    request_id = str(request.get("id", ""))
+    write_response({"id": request_id, "ok": True, "pong": True})
+
+
 def main():
     runtime = ModelRuntime()
     for raw in sys.stdin:
@@ -123,6 +127,8 @@ def main():
                 handle_transcribe(runtime, request)
             elif op == "preload":
                 handle_preload(runtime, request)
+            elif op == "ping":
+                handle_ping(request)
             else:
                 write_response(
                     {
