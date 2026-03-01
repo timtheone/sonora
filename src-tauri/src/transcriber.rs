@@ -20,6 +20,8 @@ const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, samples: &[f32]) -> Result<String, String>;
 
+    fn set_stream_context(&self, _context: Option<&str>) {}
+
     fn prepare(&self) -> Result<(), String> {
         Ok(())
     }
@@ -244,6 +246,7 @@ pub struct FasterWhisperSidecarConfig {
     pub device: String,
     pub compute_type: String,
     pub beam_size: u8,
+    pub condition_on_previous_text: bool,
 }
 
 #[derive(Debug)]
@@ -258,6 +261,7 @@ pub struct FasterWhisperSidecarTranscriber {
     pub config: FasterWhisperSidecarConfig,
     worker: Arc<Mutex<Option<FasterWhisperWorker>>>,
     preloaded: Arc<Mutex<bool>>,
+    context_prompt: Arc<Mutex<Option<String>>>,
 }
 
 impl FasterWhisperSidecarTranscriber {
@@ -266,6 +270,7 @@ impl FasterWhisperSidecarTranscriber {
             config,
             worker: Arc::new(Mutex::new(None)),
             preloaded: Arc::new(Mutex::new(false)),
+            context_prompt: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -279,6 +284,11 @@ impl FasterWhisperSidecarTranscriber {
         let token = temporary_token();
         let temp_dir = std::env::temp_dir();
         let wav_path = temp_dir.join(format!("sonora-faster-{token}.wav"));
+        let initial_prompt = self
+            .context_prompt
+            .lock()
+            .map_err(|_| "failed to acquire faster-whisper context lock".to_string())?
+            .clone();
 
         write_wav_file(&wav_path, samples)?;
         let request = FasterWhisperRequest {
@@ -290,6 +300,8 @@ impl FasterWhisperSidecarTranscriber {
             device: self.config.device.clone(),
             compute_type: self.config.compute_type.clone(),
             beam_size: self.config.beam_size,
+            condition_on_previous_text: self.config.condition_on_previous_text,
+            initial_prompt,
         };
 
         let result = self.send_request(request);
@@ -476,6 +488,12 @@ impl Transcriber for FasterWhisperSidecarTranscriber {
         self.transcribe_impl(samples)
     }
 
+    fn set_stream_context(&self, context: Option<&str>) {
+        if let Ok(mut guard) = self.context_prompt.lock() {
+            *guard = trim_context_prompt(context);
+        }
+    }
+
     fn prepare(&self) -> Result<(), String> {
         self.prepare_impl()
     }
@@ -503,6 +521,9 @@ struct FasterWhisperRequest {
     device: String,
     compute_type: String,
     beam_size: u8,
+    condition_on_previous_text: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initial_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -660,6 +681,15 @@ impl Transcriber for RuntimeTranscriber {
         }
     }
 
+    fn set_stream_context(&self, context: Option<&str>) {
+        match self {
+            RuntimeTranscriber::Whisper(runtime) => runtime.set_stream_context(context),
+            RuntimeTranscriber::FasterWhisper(runtime) => runtime.set_stream_context(context),
+            RuntimeTranscriber::Stub(stub) => stub.set_stream_context(context),
+            RuntimeTranscriber::Unavailable { .. } => {}
+        }
+    }
+
     fn prepare(&self) -> Result<(), String> {
         match self {
             RuntimeTranscriber::Stub(stub) => stub.prepare(),
@@ -808,6 +838,7 @@ fn build_faster_whisper_runtime(spec: EngineSpec) -> RuntimeEngine {
                 device: device.clone(),
                 compute_type,
                 beam_size: spec.faster_whisper_beam_size.clamp(1, 8),
+                condition_on_previous_text: true,
             },
         ))
     } else {
@@ -1205,6 +1236,29 @@ fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
             seen.insert(key)
         })
         .collect()
+}
+
+fn trim_context_prompt(context: Option<&str>) -> Option<String> {
+    const MAX_CONTEXT_CHARS: usize = 220;
+
+    let normalized = context
+        .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if normalized.len() <= MAX_CONTEXT_CHARS {
+        return Some(normalized);
+    }
+
+    let start = normalized.len().saturating_sub(MAX_CONTEXT_CHARS);
+    let trimmed = normalized[start..].trim_start().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn temporary_token() -> String {

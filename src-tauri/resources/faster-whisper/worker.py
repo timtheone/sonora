@@ -57,6 +57,10 @@ def handle_transcribe(runtime: ModelRuntime, request: dict):
     compute_type = str(request.get("compute_type", "int8")).strip() or "int8"
     language = str(request.get("language", "en")).strip() or "en"
     beam_size = int(request.get("beam_size", 1))
+    condition_on_previous_text = bool(request.get("condition_on_previous_text", True))
+    initial_prompt = request.get("initial_prompt", None)
+    if initial_prompt is not None:
+        initial_prompt = str(initial_prompt).strip() or None
 
     started_at = perf_counter()
     model = runtime.get_model(model_name, device, compute_type)
@@ -64,7 +68,8 @@ def handle_transcribe(runtime: ModelRuntime, request: dict):
         audio_path,
         language=language,
         beam_size=beam_size,
-        condition_on_previous_text=False,
+        condition_on_previous_text=condition_on_previous_text,
+        initial_prompt=initial_prompt,
         vad_filter=False,
     )
     pieces = []
@@ -130,7 +135,7 @@ def run_warmup_inference(model, language: str):
             warmup_path,
             language=language,
             beam_size=1,
-            condition_on_previous_text=False,
+            condition_on_previous_text=True,
             vad_filter=False,
         )
         for _ in segments:

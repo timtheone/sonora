@@ -89,6 +89,9 @@ export function useAppController() {
     );
   const [fasterWhisperBeamSize, setFasterWhisperBeamSize] =
     useState<number>(DEFAULT_SETTINGS.fasterWhisperBeamSize);
+  const [vadDisabled, setVadDisabled] = useState<boolean>(DEFAULT_SETTINGS.vadDisabled);
+  const [vadRmsThresholdMilli, setVadRmsThresholdMilli] =
+    useState<number>(DEFAULT_SETTINGS.vadRmsThresholdMilli);
   const [availableMicrophones, setAvailableMicrophones] = useState<
     Array<{ id: string; label: string }>
   >([]);
@@ -188,6 +191,10 @@ export function useAppController() {
           setFasterWhisperModel(settings.faster_whisper_model ?? "");
           setFasterWhisperComputeType(settings.faster_whisper_compute_type);
           setFasterWhisperBeamSize(Math.max(1, Math.min(8, settings.faster_whisper_beam_size)));
+          setVadDisabled(settings.vad_disabled);
+          setVadRmsThresholdMilli(
+            Math.max(1, Math.min(80, settings.vad_rms_threshold_milli ?? 9)),
+          );
           setClipboardFallback(settings.clipboard_fallback);
           setLaunchAtStartup(settings.launch_at_startup);
           setHardwareProfile(hardware);
@@ -301,6 +308,8 @@ export function useAppController() {
         faster_whisper_model: selectedFasterWhisperModel,
         faster_whisper_compute_type: fasterWhisperComputeType,
         faster_whisper_beam_size: Math.max(1, Math.min(8, Math.round(fasterWhisperBeamSize))),
+        vad_disabled: vadDisabled,
+        vad_rms_threshold_milli: Math.max(1, Math.min(80, Math.round(vadRmsThresholdMilli))),
         clipboard_fallback: clipboardFallback,
         launch_at_startup: launchAtStartup,
       });
@@ -320,6 +329,8 @@ export function useAppController() {
       setFasterWhisperModel(updated.faster_whisper_model ?? "");
       setFasterWhisperComputeType(updated.faster_whisper_compute_type);
       setFasterWhisperBeamSize(Math.max(1, Math.min(8, updated.faster_whisper_beam_size)));
+      setVadDisabled(updated.vad_disabled);
+      setVadRmsThresholdMilli(Math.max(1, Math.min(80, updated.vad_rms_threshold_milli ?? 9)));
       setLaunchAtStartup(updated.launch_at_startup);
       const [status, runtimeTranscriber] = await Promise.all([
         getModelStatus(),
@@ -357,6 +368,10 @@ export function useAppController() {
       setFasterWhisperComputeType(updatedSettings.faster_whisper_compute_type);
       setFasterWhisperBeamSize(
         Math.max(1, Math.min(8, updatedSettings.faster_whisper_beam_size)),
+      );
+      setVadDisabled(updatedSettings.vad_disabled);
+      setVadRmsThresholdMilli(
+        Math.max(1, Math.min(80, updatedSettings.vad_rms_threshold_milli ?? 9)),
       );
       setTranscriberStatus(await getTranscriberStatus());
       setSettingsSavedAt(new Date().toLocaleTimeString());
@@ -412,6 +427,14 @@ export function useAppController() {
     setError(String(cause));
   }
 
+  function applyHighAccuracyPreset() {
+    setChunkDurationMs(2600);
+    setPartialCadenceMs(1200);
+    setFasterWhisperBeamSize(5);
+    setVadDisabled(false);
+    setVadRmsThresholdMilli(7);
+  }
+
   return {
     available,
     state,
@@ -430,6 +453,8 @@ export function useAppController() {
     fasterWhisperModel,
     fasterWhisperComputeType,
     fasterWhisperBeamSize,
+    vadDisabled,
+    vadRmsThresholdMilli,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -454,8 +479,11 @@ export function useAppController() {
     setFasterWhisperModel,
     setFasterWhisperComputeType,
     setFasterWhisperBeamSize,
+    setVadDisabled,
+    setVadRmsThresholdMilli,
     setClipboardFallback,
     setLaunchAtStartup,
+    applyHighAccuracyPreset,
     onHotkeyDown,
     onCancel,
     saveSettings,

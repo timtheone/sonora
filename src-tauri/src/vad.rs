@@ -1,5 +1,6 @@
 #[derive(Debug, Clone)]
 pub struct VadConfig {
+    pub enabled: bool,
     pub rms_threshold: f32,
     pub min_samples: usize,
     pub window_samples: usize,
@@ -8,6 +9,7 @@ pub struct VadConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             rms_threshold: 0.009,
             min_samples: 512,
             window_samples: 512,
@@ -16,6 +18,10 @@ impl Default for VadConfig {
 }
 
 pub fn has_speech(samples: &[f32], config: &VadConfig) -> bool {
+    if !config.enabled {
+        return true;
+    }
+
     if samples.len() < config.min_samples {
         return false;
     }
@@ -91,5 +97,13 @@ mod tests {
         let config = VadConfig::default();
         let noise = vec![0.003_f32; 16_000];
         assert!(!has_speech(&noise, &config));
+    }
+
+    #[test]
+    fn allows_all_chunks_when_disabled() {
+        let mut config = VadConfig::default();
+        config.enabled = false;
+        assert!(has_speech(&[], &config));
+        assert!(has_speech(&vec![0.0_f32; 128], &config));
     }
 }

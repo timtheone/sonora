@@ -41,6 +41,8 @@ function Phase2SettingsPanelComponent() {
     fasterWhisperModel,
     fasterWhisperComputeType,
     fasterWhisperBeamSize,
+    vadDisabled,
+    vadRmsThresholdMilli,
     availableMicrophones,
     clipboardFallback,
     launchAtStartup,
@@ -55,8 +57,11 @@ function Phase2SettingsPanelComponent() {
     setFasterWhisperModel,
     setFasterWhisperComputeType,
     setFasterWhisperBeamSize,
+    setVadDisabled,
+    setVadRmsThresholdMilli,
     setClipboardFallback,
     setLaunchAtStartup,
+    applyHighAccuracyPreset,
     saveSettings,
     refreshMicrophones,
   } = useAppControllerContext();
@@ -91,6 +96,11 @@ function Phase2SettingsPanelComponent() {
         faster-whisper requires worker setup via <code>pnpm sidecar:setup:faster-whisper</code>.
       </p>
       <p className="muted">Current faster-whisper presets are tuned for English dictation.</p>
+      <div className="actions">
+        <button disabled={!available} onClick={applyHighAccuracyPreset}>
+          Apply High Accuracy Preset
+        </button>
+      </div>
       {sttEngine === "whisper_cpp" ? (
         <label className="field">
           <span>whisper.cpp model</span>
@@ -234,6 +244,27 @@ function Phase2SettingsPanelComponent() {
           <option value="cuda">CUDA (NVIDIA GPU)</option>
           <option value="cpu">CPU only</option>
         </select>
+      </label>
+      <label className="field inline">
+        <input
+          type="checkbox"
+          disabled={!available}
+          checked={vadDisabled}
+          onChange={(event) => setVadDisabled(event.currentTarget.checked)}
+        />
+        <span>Disable VAD (benchmark mode)</span>
+      </label>
+      <label className="field">
+        <span>VAD threshold ({(vadRmsThresholdMilli / 1000).toFixed(3)})</span>
+        <input
+          type="range"
+          min={1}
+          max={80}
+          step={1}
+          disabled={!available || vadDisabled}
+          value={vadRmsThresholdMilli}
+          onChange={(event) => setVadRmsThresholdMilli(Number(event.currentTarget.value))}
+        />
       </label>
       <div className="actions">
         <button disabled={!available} onClick={saveSettings}>

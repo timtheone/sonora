@@ -20,6 +20,8 @@ export interface AppSettings {
   faster_whisper_model: string | null;
   faster_whisper_compute_type: FasterWhisperComputeType;
   faster_whisper_beam_size: number;
+  vad_disabled: boolean;
+  vad_rms_threshold_milli: number | null;
   clipboard_fallback: boolean;
   launch_at_startup: boolean;
 }
@@ -38,6 +40,8 @@ export interface AppSettingsPatch {
   faster_whisper_model?: string | null;
   faster_whisper_compute_type?: FasterWhisperComputeType;
   faster_whisper_beam_size?: number;
+  vad_disabled?: boolean;
+  vad_rms_threshold_milli?: number;
   clipboard_fallback?: boolean;
   launch_at_startup?: boolean;
 }

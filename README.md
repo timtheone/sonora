@@ -49,6 +49,24 @@ Optional custom log path:
 pnpm perf:watch -- --path /absolute/path/to/runtime.log
 ```
 
+Record a reproducible benchmark sample from your microphone (16 kHz mono WAV):
+
+```bash
+pnpm benchmark:record -- --out benchmark/my-sample.wav --seconds 25
+```
+
+Run comparative benchmark replay across engines/models (same audio each run):
+
+```bash
+pnpm benchmark:run -- --audio benchmark/my-sample.wav --reference benchmark/my-reference.txt
+```
+
+Run specific benchmark cases only:
+
+```bash
+pnpm benchmark:run -- --audio benchmark/my-sample.wav --case faster-distil-large-v3 --case faster-large-v3
+```
+
 Build frontend bundle:
 
 ```bash
@@ -197,7 +215,9 @@ pnpm tauri:build
 - Faster-whisper settings now include model id/path, compute type, and beam size controls.
 - Set `SONORA_PERF=1` to enable chunk-level perf trace events in runtime logs.
 - `pnpm perf:watch` reads those events and renders a live timing table (`capture/queue/VAD/inference/emit`).
+- `pnpm perf:watch` now reports speech-chunk ratio and speech-only p50/p95 inference latency.
 - UI includes a live mic capture test path (Web Audio -> 16 kHz feed into Rust dictation pipeline).
 - Model binaries are downloaded via `pnpm model:download` into `src-tauri/resources/models/`.
 - Sidecar binary is generated via `pnpm sidecar:setup` into `src-tauri/resources/bin/`.
 - Faster-whisper worker binary is generated via `pnpm sidecar:setup:faster-whisper` into `src-tauri/resources/bin/`.
+- Phase 2 includes a high-accuracy preset and VAD controls (threshold + benchmark disable switch).

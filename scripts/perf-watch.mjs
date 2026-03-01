@@ -123,16 +123,22 @@ function renderTable(state) {
 
   const statsWindow = [...state.chunksById.values()]
     .sort((a, b) => b._seq - a._seq)
-    .slice(0, 120)
-    .filter((chunk) => chunk.inference_ms > 0 || chunk.emitted_transcript);
+    .slice(0, 120);
 
-  const inferValues = statsWindow
+  const speechWindow = statsWindow.filter((chunk) => chunk.had_speech);
+
+  const inferValues = speechWindow
     .map((chunk) => chunk.inference_ms)
     .filter((value) => value > 0);
-  const totalValues = statsWindow.map((chunk) => {
+  const totalValues = speechWindow.map((chunk) => {
     const emitUi = state.uiByChunk.get(chunk.chunk_id) ?? 0;
     return chunk.total_worker_ms + emitUi;
   });
+
+  const speechPct =
+    statsWindow.length === 0
+      ? null
+      : Math.round((speechWindow.length / statsWindow.length) * 100);
 
   const p50Infer = percentile(inferValues, 50);
   const p95Infer = percentile(inferValues, 95);
@@ -176,7 +182,7 @@ function renderTable(state) {
 
   process.stdout.write("\n");
   process.stdout.write(
-    `p50 infer=${formatMs(p50Infer)}ms  p95 infer=${formatMs(p95Infer)}ms  p50 total=${formatMs(p50Total)}ms  p95 total=${formatMs(p95Total)}ms\n`,
+    `speech chunks=${speechWindow.length}/${statsWindow.length} (${speechPct ?? "-"}%)  p50 infer=${formatMs(p50Infer)}ms  p95 infer=${formatMs(p95Infer)}ms  p50 total=${formatMs(p50Total)}ms  p95 total=${formatMs(p95Total)}ms\n`,
   );
 }
 

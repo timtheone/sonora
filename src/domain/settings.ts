@@ -53,6 +53,8 @@ export interface AppSettings {
   fasterWhisperModel: string | null;
   fasterWhisperComputeType: FasterWhisperComputeType;
   fasterWhisperBeamSize: number;
+  vadDisabled: boolean;
+  vadRmsThresholdMilli: number;
   clipboardFallback: boolean;
   launchAtStartup: boolean;
 }
@@ -72,6 +74,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fasterWhisperModel: null,
   fasterWhisperComputeType: "auto",
   fasterWhisperBeamSize: 1,
+  vadDisabled: false,
+  vadRmsThresholdMilli: 9,
   clipboardFallback: true,
   launchAtStartup: false,
 };
@@ -108,6 +112,11 @@ export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings
       input.fasterWhisperBeamSize === undefined
         ? DEFAULT_SETTINGS.fasterWhisperBeamSize
         : Math.max(1, Math.min(8, Math.round(input.fasterWhisperBeamSize))),
+    vadDisabled: input.vadDisabled ?? DEFAULT_SETTINGS.vadDisabled,
+    vadRmsThresholdMilli:
+      input.vadRmsThresholdMilli === undefined
+        ? DEFAULT_SETTINGS.vadRmsThresholdMilli
+        : Math.max(1, Math.min(80, Math.round(input.vadRmsThresholdMilli))),
     clipboardFallback: input.clipboardFallback ?? DEFAULT_SETTINGS.clipboardFallback,
     launchAtStartup: input.launchAtStartup ?? DEFAULT_SETTINGS.launchAtStartup,
   };

@@ -78,8 +78,16 @@ impl<T: Transcriber> DictationPipeline<T> {
         self.tuning = tuning;
     }
 
+    pub fn set_vad_config(&mut self, vad_config: VadConfig) {
+        self.vad_config = vad_config;
+    }
+
     pub fn set_transcriber(&mut self, transcriber: T) {
         self.transcriber = transcriber;
+    }
+
+    pub fn set_stream_context(&self, context: Option<&str>) {
+        self.transcriber.set_stream_context(context);
     }
 
     pub fn prepare_transcriber(&self) -> Result<(), String> {

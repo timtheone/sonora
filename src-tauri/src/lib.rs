@@ -56,6 +56,8 @@ use tauri::Manager;
 use transcriber::{
     build_runtime_engine, default_faster_whisper_model, EngineSpec, RuntimeTranscriber,
 };
+#[cfg(feature = "desktop")]
+use vad::VadConfig;
 
 #[cfg(feature = "desktop")]
 struct PipelineStore {
@@ -75,6 +77,7 @@ impl PipelineStore {
             },
         );
         pipeline.set_tuning(tuning_for_settings(settings));
+        pipeline.set_vad_config(vad_config_for_settings(settings));
 
         Self {
             pipeline: Arc::new(Mutex::new(pipeline)),
@@ -371,6 +374,19 @@ fn resolve_engine_model_path(settings: &AppSettings, resource_dir: Option<&Path>
 }
 
 #[cfg(feature = "desktop")]
+fn vad_config_for_settings(settings: &AppSettings) -> VadConfig {
+    let mut config = VadConfig::default();
+    config.enabled = !settings.vad_disabled;
+
+    if let Some(threshold_milli) = settings.vad_rms_threshold_milli {
+        let clamped = threshold_milli.clamp(1, 80);
+        config.rms_threshold = clamped as f32 / 1000.0;
+    }
+
+    config
+}
+
+#[cfg(feature = "desktop")]
 fn build_transcriber_status(app: &tauri::AppHandle, settings: &AppSettings) -> TranscriberStatus {
     let resource_dir = app.path().resource_dir().ok();
     let model_path = resolve_engine_model_path(settings, resource_dir.as_deref());
@@ -423,6 +439,7 @@ fn apply_runtime_transcriber_from_settings(
         .map_err(|_| "failed to acquire pipeline state".to_string())?;
     pipeline.set_model_profile(settings.model_profile);
     pipeline.set_tuning(tuning_for_settings(settings));
+    pipeline.set_vad_config(vad_config_for_settings(settings));
     pipeline.set_transcriber(runtime.transcriber);
 
     Ok(build_transcriber_status(app, settings))
@@ -978,13 +995,18 @@ fn run_transcription_worker(
 
         let pipeline_started_at = Instant::now();
         let metrics = match pipeline.lock() {
-            Ok(mut locked) => match locked.process_audio_chunk_profiled(&chunk) {
-                Ok(value) => value,
-                Err(error) => {
-                    let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
-                    continue;
+            Ok(mut locked) => {
+                locked.set_stream_context(
+                    pending_utterance.as_ref().map(|value| value.text.as_str()),
+                );
+                match locked.process_audio_chunk_profiled(&chunk) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+                        continue;
+                    }
                 }
-            },
+            }
             Err(_) => {
                 let _ = log_store::append(
                     &logs_path,

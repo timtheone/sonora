@@ -62,6 +62,10 @@ pub struct AppSettings {
     pub faster_whisper_compute_type: FasterWhisperComputeType,
     #[serde(default = "default_faster_whisper_beam_size")]
     pub faster_whisper_beam_size: u8,
+    #[serde(default)]
+    pub vad_disabled: bool,
+    #[serde(default)]
+    pub vad_rms_threshold_milli: Option<u16>,
     pub clipboard_fallback: bool,
     pub launch_at_startup: bool,
 }
@@ -103,6 +107,8 @@ impl Default for AppSettings {
             faster_whisper_model: None,
             faster_whisper_compute_type: default_faster_whisper_compute_type(),
             faster_whisper_beam_size: default_faster_whisper_beam_size(),
+            vad_disabled: false,
+            vad_rms_threshold_milli: None,
             clipboard_fallback: true,
             launch_at_startup: false,
         }
@@ -138,6 +144,8 @@ mod tests {
             FasterWhisperComputeType::Auto
         );
         assert_eq!(settings.faster_whisper_beam_size, 1);
+        assert!(!settings.vad_disabled);
+        assert!(settings.vad_rms_threshold_milli.is_none());
     }
 
     #[test]
@@ -169,5 +177,7 @@ mod tests {
             FasterWhisperComputeType::Auto
         );
         assert_eq!(parsed.faster_whisper_beam_size, 1);
+        assert!(!parsed.vad_disabled);
+        assert!(parsed.vad_rms_threshold_milli.is_none());
     }
 }
