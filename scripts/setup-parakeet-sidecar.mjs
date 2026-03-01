@@ -17,6 +17,47 @@ const workerSource = path.join(projectRoot, "src-tauri", "resources", "parakeet"
 const platform = process.platform;
 const executableName = platform === "win32" ? "parakeet-worker.exe" : "parakeet-worker";
 const metadataFileName = "parakeet-sidecar.json";
+const DEFAULT_TORCH_CUDA_CHANNEL = "cu124";
+
+function hasNvidiaDriver() {
+  const result = spawnSync("nvidia-smi", ["-L"], { encoding: "utf8" });
+  if (result.error && result.error.code === "ENOENT") {
+    return false;
+  }
+  return result.status === 0 && Boolean(result.stdout?.trim());
+}
+
+function parseBackend(value) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "auto" || normalized === "cpu" || normalized === "cuda") {
+    return normalized;
+  }
+  throw new Error(`Unsupported backend '${value}'. Use auto, cpu, or cuda.`);
+}
+
+function resolveTorchChannel(value) {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_TORCH_CUDA_CHANNEL;
+  }
+  if (["cu118", "cu121", "cu124", "cu126"].includes(normalized)) {
+    return normalized;
+  }
+  throw new Error(`Unsupported torch CUDA channel '${value}'. Use cu118, cu121, cu124, or cu126.`);
+}
+
+function resolveBuildBackend(requestedBackend) {
+  if (requestedBackend === "cpu") {
+    return "cpu";
+  }
+  if (requestedBackend === "cuda") {
+    return "cuda";
+  }
+  return hasNvidiaDriver() ? "cuda" : "cpu";
+}
 
 function missingCommandHelp(command) {
   const base = `Missing required command: '${command}'.`;
@@ -55,12 +96,22 @@ function runCommand(command, args, options = {}) {
 }
 
 function parseArgs(argv) {
-  const args = argv.slice(2);
+  const raw = argv.slice(2);
+  const args = raw[0] === "--" ? raw.slice(1) : raw;
   if (args.includes("--help") || args.includes("-h")) {
-    return { help: true, force: false, pythonCommand: null };
+    return {
+      help: true,
+      force: false,
+      pythonCommand: null,
+      requestedBackend: "auto",
+      torchCudaChannel: DEFAULT_TORCH_CUDA_CHANNEL,
+    };
   }
 
   let pythonCommand = null;
+  let requestedBackend = parseBackend(process.env.SONORA_PARAKEET_BACKEND) ?? "auto";
+  let torchCudaChannel =
+    resolveTorchChannel(process.env.SONORA_PARAKEET_TORCH_CHANNEL ?? DEFAULT_TORCH_CUDA_CHANNEL);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--python") {
@@ -68,6 +119,20 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg.startsWith("--python=")) {
       pythonCommand = arg.slice("--python=".length);
+    } else if (arg === "--backend") {
+      requestedBackend = parseBackend(args[i + 1]) ?? "auto";
+      i += 1;
+    } else if (arg.startsWith("--backend=")) {
+      requestedBackend = parseBackend(arg.slice("--backend=".length)) ?? "auto";
+    } else if (arg === "--cuda") {
+      requestedBackend = "cuda";
+    } else if (arg === "--cpu") {
+      requestedBackend = "cpu";
+    } else if (arg === "--torch-cuda-channel") {
+      torchCudaChannel = resolveTorchChannel(args[i + 1]);
+      i += 1;
+    } else if (arg.startsWith("--torch-cuda-channel=")) {
+      torchCudaChannel = resolveTorchChannel(arg.slice("--torch-cuda-channel=".length));
     }
   }
 
@@ -75,6 +140,8 @@ function parseArgs(argv) {
     help: false,
     force: args.includes("--force"),
     pythonCommand,
+    requestedBackend,
+    torchCudaChannel,
   };
 }
 
@@ -84,11 +151,15 @@ function printHelp() {
       "Build the parakeet worker sidecar for current OS.",
       "",
       "Usage:",
-      "  pnpm sidecar:setup:parakeet [--force] [--python <command>]",
+      "  pnpm sidecar:setup:parakeet [--force] [--backend auto|cpu|cuda] [--torch-cuda-channel cu124] [--python <command>]",
       "",
       "Options:",
       "  --force            Recreate Python virtual environment",
       "  --python <cmd>     Python command to use (default: auto-detect)",
+      "  --backend          Build runtime target (default: auto)",
+      "  --cuda             Shortcut for --backend cuda",
+      "  --cpu              Shortcut for --backend cpu",
+      "  --torch-cuda-channel  CUDA wheel channel (cu118|cu121|cu124|cu126)",
       "",
       "Output:",
       `  src-tauri/resources/bin/${executableName}`,
@@ -97,6 +168,7 @@ function printHelp() {
       "Requirements:",
       "  - Python 3.10+ with venv support",
       "  - Internet access during build for Python dependencies",
+      "  - NVIDIA driver for CUDA runtime checks (when backend=cuda)",
       "",
     ].join("\n"),
   );
@@ -151,7 +223,7 @@ async function ensureVenv(pythonCommand, force) {
   }
 }
 
-async function installDependencies(venvPython) {
+async function installDependencies(venvPython, backend, torchCudaChannel) {
   const versionResult = spawnSync(
     venvPython,
     ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
@@ -189,6 +261,33 @@ async function installDependencies(venvPython) {
     "safetensors",
     "pyinstaller>=6.15,<7",
   ]);
+
+  if (backend === "cuda") {
+    const cudaIndexUrl = `https://download.pytorch.org/whl/${torchCudaChannel}`;
+    process.stdout.write(
+      `Installing CUDA-enabled torch from ${cudaIndexUrl} (force-reinstall)...\n`,
+    );
+    runCommand(venvPython, [
+      "-m",
+      "pip",
+      "install",
+      "--upgrade",
+      "--force-reinstall",
+      "--index-url",
+      cudaIndexUrl,
+      "torch",
+    ]);
+  } else {
+    process.stdout.write("Installing CPU torch runtime (force-reinstall)...\n");
+    runCommand(venvPython, [
+      "-m",
+      "pip",
+      "install",
+      "--upgrade",
+      "--force-reinstall",
+      "torch>=2.4",
+    ]);
+  }
 }
 
 async function buildWorkerBinary(venvPython) {
@@ -231,7 +330,7 @@ async function buildWorkerBinary(venvPython) {
   runCommand(venvPython, args);
 }
 
-function smokeTestWorkerExecutable() {
+function smokeTestWorkerExecutable(expectedBackend) {
   const executablePath = path.join(outputDir, executableName);
   if (!existsSync(executablePath)) {
     throw new Error(`Built worker executable not found at ${executablePath}`);
@@ -274,16 +373,34 @@ function smokeTestWorkerExecutable() {
   if (parsed.id !== "smoke-test") {
     throw new Error("Built parakeet worker smoke response did not match request id");
   }
+
+  const cudaAvailable = Boolean(parsed.cuda_available);
+  if (expectedBackend === "cuda" && !cudaAvailable) {
+    throw new Error(
+      "Parakeet worker smoke test reports cuda_available=false. Rebuild with --force --backend cuda and ensure CUDA-enabled torch installs correctly.",
+    );
+  }
+
+  process.stdout.write(
+    `parakeet worker runtime: torch=${parsed.torch_version ?? "unknown"}, torch_cuda=${parsed.torch_cuda_version ?? "unknown"}, cuda_available=${cudaAvailable}\n`,
+  );
   process.stdout.write("parakeet worker smoke test passed.\n");
+
+  return {
+    cudaAvailable,
+    torchVersion: parsed.torch_version ?? null,
+    torchCudaVersion: parsed.torch_cuda_version ?? null,
+  };
 }
 
-async function writeMetadata() {
+async function writeMetadata(metadata) {
   const metadataPath = path.join(outputDir, metadataFileName);
   const payload = {
     engine: "parakeet",
     executable: executableName,
     generated_at: new Date().toISOString(),
     platform,
+    ...metadata,
   };
 
   await fs.writeFile(metadataPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
@@ -302,6 +419,16 @@ async function main() {
   }
 
   const pythonCommand = resolvePythonCommand(options.pythonCommand);
+  const resolvedBackend = resolveBuildBackend(options.requestedBackend);
+  const torchCudaChannel = resolveTorchChannel(options.torchCudaChannel);
+
+  process.stdout.write(
+    `Resolved parakeet backend: requested=${options.requestedBackend}, resolved=${resolvedBackend}\n`,
+  );
+  if (resolvedBackend === "cuda") {
+    process.stdout.write(`Torch CUDA channel: ${torchCudaChannel}\n`);
+  }
+
   await ensureDir(cacheRoot);
   await ensureVenv(pythonCommand, options.force);
 
@@ -310,10 +437,17 @@ async function main() {
     throw new Error(`Virtualenv python not found at ${venvPython}`);
   }
 
-  await installDependencies(venvPython);
+  await installDependencies(venvPython, resolvedBackend, torchCudaChannel);
   await buildWorkerBinary(venvPython);
-  smokeTestWorkerExecutable();
-  await writeMetadata();
+  const runtimeInfo = smokeTestWorkerExecutable(resolvedBackend);
+  await writeMetadata({
+    requested_backend: options.requestedBackend,
+    resolved_backend: resolvedBackend,
+    torch_cuda_channel: resolvedBackend === "cuda" ? torchCudaChannel : null,
+    torch_version: runtimeInfo.torchVersion,
+    torch_cuda_version: runtimeInfo.torchCudaVersion,
+    cuda_available: runtimeInfo.cudaAvailable,
+  });
 }
 
 main().catch((error) => {

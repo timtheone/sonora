@@ -166,6 +166,18 @@ Build parakeet worker sidecar (packaged worker executable):
 pnpm sidecar:setup:parakeet
 ```
 
+Build parakeet worker with CUDA-enabled torch runtime:
+
+```bash
+pnpm sidecar:setup:parakeet -- --force --backend cuda
+```
+
+Optional: select CUDA wheel channel explicitly (default `cu124`):
+
+```bash
+pnpm sidecar:setup:parakeet -- --force --backend cuda --torch-cuda-channel cu124
+```
+
 Build installer bundles including whisper.cpp, faster-whisper, and parakeet sidecars:
 
 ```bash
@@ -188,6 +200,8 @@ Troubleshooting sidecar setup:
 - Parakeet model cache is written to `src-tauri/resources/models/parakeet-cache`.
 - Default faster-whisper bundle includes English models: `small.en`, `distil-large-v3`, `large-v3`.
 - Default parakeet bundle includes `nvidia/parakeet-ctc-0.6b` and `nvidia/parakeet-ctc-1.1b`.
+- If parakeet prefetch reports `torch.cuda.is_available() is false`, downloader retries with CPU/float32 automatically.
+- If you require CUDA-only parakeet prefetch, pass `--device cuda`; it now fails with rebuild instructions instead of silently falling back.
 - `nvidia/parakeet-tdt-0.6b-v3` is downloadable but currently requires a NeMo-based worker for inference.
 - Selecting `nvidia/parakeet-tdt-0.6b-v3` in current app build will report engine unavailable with a NeMo requirement message.
 - whisper.cpp q8 bundle now includes `ggml-base.en-q8_0.bin`, `ggml-small.en-q8_0.bin`, and quality bundle includes `ggml-large-v3-turbo-q8_0.bin`.

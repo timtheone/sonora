@@ -26,6 +26,12 @@ Build parakeet worker executable for packaging:
 pnpm sidecar:setup:parakeet
 ```
 
+Build parakeet worker with CUDA-enabled torch runtime:
+
+```bash
+pnpm sidecar:setup:parakeet -- --force --backend cuda
+```
+
 Prefetch model cache for offline faster-whisper usage:
 
 ```bash
@@ -49,4 +55,5 @@ This directory is used by runtime binary discovery and can be bundled in install
 `parakeet-sidecar.json` is generated here when parakeet worker build succeeds.
 Model cache is stored under `models/faster-whisper-cache/` when prefetched.
 Model cache is stored under `models/parakeet-cache/` when prefetched.
+Parakeet prefetch with `--device cuda` is strict and fails if worker CUDA runtime is unavailable.
 TDT/RNNT parakeet variants (for example `parakeet-tdt-0.6b-v3`) are not supported by the current Transformers-based worker.

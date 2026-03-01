@@ -97,7 +97,16 @@ class ModelRuntime:
 
 def handle_ping(request: dict):
     request_id = str(request.get("id", ""))
-    write_response({"id": request_id, "ok": True, "pong": True})
+    write_response(
+        {
+            "id": request_id,
+            "ok": True,
+            "pong": True,
+            "cuda_available": bool(torch.cuda.is_available()),
+            "torch_version": str(getattr(torch, "__version__", "unknown")),
+            "torch_cuda_version": str(getattr(torch.version, "cuda", "none") or "none"),
+        }
+    )
 
 
 def handle_preload(runtime: ModelRuntime, request: dict):

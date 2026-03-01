@@ -463,6 +463,7 @@ async function prefetchParakeetModels(models, deviceArg, computeTypeArg) {
 
   await ensureDir(parakeetCacheDir);
   const device = resolveDevice(deviceArg);
+  const strictCudaRequested = String(deviceArg ?? "").trim().toLowerCase() === "cuda";
   const computeType = resolveParakeetComputeType(computeTypeArg, device);
   process.stdout.write(
     `Prefetching parakeet models [${models.join(", ")}] with device=${device}, compute_type=${computeType}\n`,
@@ -499,6 +500,32 @@ async function prefetchParakeetModels(models, deviceArg, computeTypeArg) {
     }
   });
 
+  async function waitForResponse(requestId) {
+    const startedAt = Date.now();
+    let matched = null;
+    while (!matched) {
+      if (Date.now() - startedAt > 300_000) {
+        throw new Error(`Timed out while prefetching '${requestId}'.`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      matched = responses.find((entry) => entry.id === requestId);
+    }
+    return matched;
+  }
+
+  async function preloadOne(model, requestId, requestedDevice, requestedComputeType) {
+    await sendJsonLine(child.stdin, {
+      op: "preload",
+      id: requestId,
+      model,
+      device: requestedDevice,
+      compute_type: requestedComputeType,
+      language: "en",
+    });
+
+    return waitForResponse(requestId);
+  }
+
   for (const model of models) {
     if (isParakeetModelUnsupportedByTransformersWorker(model)) {
       throw new Error(
@@ -507,23 +534,28 @@ async function prefetchParakeetModels(models, deviceArg, computeTypeArg) {
     }
 
     const requestId = `prefetch-${model}`;
-    await sendJsonLine(child.stdin, {
-      op: "preload",
-      id: requestId,
-      model,
-      device,
-      compute_type: computeType,
-      language: "en",
-    });
+    let matched = await preloadOne(model, requestId, device, computeType);
 
-    const startedAt = Date.now();
-    let matched = null;
-    while (!matched) {
-      if (Date.now() - startedAt > 300_000) {
-        throw new Error(`Timed out while prefetching '${model}'.`);
+    if (
+      !matched.ok &&
+      device === "cuda" &&
+      String(matched.error ?? "").toLowerCase().includes("torch.cuda.is_available() is false")
+    ) {
+      if (strictCudaRequested) {
+        throw new Error(
+          `Failed to prefetch '${model}': CUDA requested but parakeet worker has no CUDA runtime (torch.cuda.is_available() is false). Rebuild worker with CUDA torch: pnpm sidecar:setup:parakeet -- --force --backend cuda`,
+        );
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      matched = responses.find((entry) => entry.id === requestId);
+
+      process.stdout.write(
+        `CUDA not available in parakeet worker runtime; retrying '${model}' with CPU/float32...\n`,
+      );
+      const fallbackRequestId = `${requestId}-cpu-fallback`;
+      matched = await preloadOne(model, fallbackRequestId, "cpu", "float32");
+      if (matched.ok) {
+        process.stdout.write(`Prefetched ${model} (${matched.load_ms} ms) [cpu fallback]\n`);
+        continue;
+      }
     }
 
     if (!matched.ok) {
