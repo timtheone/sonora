@@ -22,7 +22,7 @@ use insertion::{append_recent, resolve_status, InsertionRecord};
 #[cfg(feature = "desktop")]
 use pipeline::{DictationPipeline, PipelineStatus};
 #[cfg(feature = "desktop")]
-use postprocess::{is_duplicate_transcript, normalize_transcript};
+use postprocess::{is_duplicate_transcript, merge_transcript_segments, normalize_transcript};
 #[cfg(feature = "desktop")]
 use profile::{
     build_model_status, detect_hardware_tier, recommended_profile_for_tier, tuning_for_settings,
@@ -188,6 +188,13 @@ struct TranscriptPayload {
 struct TranscriptCorrelation {
     chunk_id: u64,
     emitted_unix_ms: u64,
+}
+
+#[cfg(feature = "desktop")]
+#[derive(Clone)]
+struct PendingUtterance {
+    text: String,
+    last_speech_unix_ms: u64,
 }
 
 #[cfg(feature = "desktop")]
@@ -675,6 +682,55 @@ fn select_fresh_transcript(
 }
 
 #[cfg(feature = "desktop")]
+fn upsert_pending_utterance(
+    pending: &mut Option<PendingUtterance>,
+    raw_transcript: Option<String>,
+    observed_unix_ms: u64,
+) {
+    let collapsed = raw_transcript
+        .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    if collapsed.is_empty() {
+        return;
+    }
+
+    match pending {
+        Some(utterance) => {
+            utterance.text = merge_transcript_segments(&utterance.text, &collapsed);
+            utterance.last_speech_unix_ms = observed_unix_ms;
+        }
+        None => {
+            *pending = Some(PendingUtterance {
+                text: collapsed,
+                last_speech_unix_ms: observed_unix_ms,
+            });
+        }
+    }
+}
+
+#[cfg(feature = "desktop")]
+fn should_flush_pending_utterance(
+    pending: &Option<PendingUtterance>,
+    observed_unix_ms: u64,
+    session_gap_ms: u64,
+) -> bool {
+    pending
+        .as_ref()
+        .map(|utterance| {
+            observed_unix_ms.saturating_sub(utterance.last_speech_unix_ms) >= session_gap_ms
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "desktop")]
+fn take_pending_utterance(pending: &mut Option<PendingUtterance>) -> Option<String> {
+    pending
+        .take()
+        .map(|utterance| normalize_transcript(&utterance.text))
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(feature = "desktop")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LiveCaptureChunkPlan {
     next_chunk_size: usize,
@@ -736,6 +792,9 @@ const FRAME_RECV_TIMEOUT_MS: u64 = 60;
 
 #[cfg(feature = "desktop")]
 const METER_EMIT_INTERVAL_MS: u64 = 33;
+
+#[cfg(feature = "desktop")]
+const TRANSCRIPT_SESSION_GAP_MS: u64 = 2_000;
 
 #[cfg(feature = "desktop")]
 fn should_emit_meter_update(elapsed: Duration) -> bool {
@@ -824,6 +883,7 @@ fn run_transcription_worker(
     frame_rx: Receiver<Vec<f32>>,
 ) {
     let mut pending_samples = VecDeque::<f32>::new();
+    let mut pending_utterance: Option<PendingUtterance> = None;
     let mut last_feed_at = Instant::now() - Duration::from_secs(8);
     let mut pending_started_at: Option<Instant> = None;
     let mut pending_downsample_ms = 0u64;
@@ -832,7 +892,24 @@ fn run_transcription_worker(
     loop {
         let frame = match frame_rx.recv_timeout(Duration::from_millis(FRAME_RECV_TIMEOUT_MS)) {
             Ok(samples) => samples,
-            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Timeout) => {
+                if should_flush_pending_utterance(
+                    &pending_utterance,
+                    current_unix_ms_u64(),
+                    TRANSCRIPT_SESSION_GAP_MS,
+                ) {
+                    if let Err(error) = emit_transcript_if_fresh(
+                        &app,
+                        &logs_path,
+                        &last_transcript,
+                        take_pending_utterance(&mut pending_utterance),
+                        None,
+                    ) {
+                        let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+                    }
+                }
+                continue;
+            }
             Err(RecvTimeoutError::Disconnected) => break,
         };
 
@@ -862,6 +939,15 @@ fn run_transcription_worker(
         };
 
         if status.state != pipeline::DictationState::Listening {
+            if let Err(error) = emit_transcript_if_fresh(
+                &app,
+                &logs_path,
+                &last_transcript,
+                take_pending_utterance(&mut pending_utterance),
+                None,
+            ) {
+                let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+            }
             pending_samples.clear();
             continue;
         }
@@ -915,24 +1001,46 @@ fn run_transcription_worker(
         let pipeline_ms = duration_millis_u64(pipeline_started_at.elapsed());
 
         let emitted_unix_ms = current_unix_ms_u64();
-        let emit_started_at = Instant::now();
-        let emitted_transcript = match emit_transcript_if_fresh(
-            &app,
-            &logs_path,
-            &last_transcript,
+        upsert_pending_utterance(
+            &mut pending_utterance,
             metrics.transcript.clone(),
-            Some(TranscriptCorrelation {
-                chunk_id,
+            emitted_unix_ms,
+        );
+
+        let ready_to_emit = !metrics.had_speech
+            && should_flush_pending_utterance(
+                &pending_utterance,
                 emitted_unix_ms,
-            }),
-        ) {
-            Ok(value) => value.is_some(),
-            Err(error) => {
-                let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
-                false
+                TRANSCRIPT_SESSION_GAP_MS,
+            );
+
+        let emit_started_at = Instant::now();
+        let emitted_text = if ready_to_emit {
+            match emit_transcript_if_fresh(
+                &app,
+                &logs_path,
+                &last_transcript,
+                take_pending_utterance(&mut pending_utterance),
+                Some(TranscriptCorrelation {
+                    chunk_id,
+                    emitted_unix_ms,
+                }),
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+                    None
+                }
             }
+        } else {
+            None
         };
+        let emitted_transcript = emitted_text.is_some();
         let emit_rust_ms = duration_millis_u64(emit_started_at.elapsed());
+        let transcript_len = emitted_text
+            .as_deref()
+            .map(str::len)
+            .unwrap_or_else(|| metrics.transcript.as_deref().map(str::len).unwrap_or(0));
 
         append_perf_event(
             &logs_path,
@@ -958,10 +1066,20 @@ fn run_transcription_worker(
                 enough_samples: metrics.enough_samples,
                 had_speech: metrics.had_speech,
                 emitted_transcript,
-                transcript_len: metrics.transcript.as_deref().map(str::len).unwrap_or(0),
+                transcript_len,
             },
         );
         pending_downsample_ms = 0;
+    }
+
+    if let Err(error) = emit_transcript_if_fresh(
+        &app,
+        &logs_path,
+        &last_transcript,
+        take_pending_utterance(&mut pending_utterance),
+        None,
+    ) {
+        let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
     }
 }
 
@@ -1346,6 +1464,56 @@ mod tests {
 
         let absent = select_fresh_transcript(&mut last, None);
         assert!(absent.is_none());
+    }
+
+    #[test]
+    fn pending_utterance_merges_continuous_segments() {
+        let mut pending = None;
+        upsert_pending_utterance(
+            &mut pending,
+            Some("At 7:45 a.m. I walked".to_string()),
+            1_000,
+        );
+        upsert_pending_utterance(
+            &mut pending,
+            Some("three blocks to Maple Street".to_string()),
+            1_600,
+        );
+
+        let text = take_pending_utterance(&mut pending);
+        assert_eq!(
+            text.as_deref(),
+            Some("At 7:45 a.m. I walked three blocks to Maple Street.")
+        );
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn pending_utterance_flushes_after_silence_gap() {
+        let mut pending = None;
+        upsert_pending_utterance(
+            &mut pending,
+            Some("One large cappuccino".to_string()),
+            2_000,
+        );
+
+        assert!(!should_flush_pending_utterance(
+            &pending,
+            3_900,
+            TRANSCRIPT_SESSION_GAP_MS
+        ));
+        assert!(should_flush_pending_utterance(
+            &pending,
+            4_000,
+            TRANSCRIPT_SESSION_GAP_MS
+        ));
+    }
+
+    #[test]
+    fn pending_utterance_ignores_empty_updates() {
+        let mut pending = None;
+        upsert_pending_utterance(&mut pending, Some("   ".to_string()), 5_000);
+        assert!(pending.is_none());
     }
 
     #[test]
