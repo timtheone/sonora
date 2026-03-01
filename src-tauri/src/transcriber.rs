@@ -257,7 +257,7 @@ impl FasterWhisperSidecarTranscriber {
         let request = FasterWhisperRequest {
             op: "transcribe".to_string(),
             id: token,
-            audio_path: wav_path.to_string_lossy().to_string(),
+            audio_path: path_to_sidecar_string(&wav_path),
             language: self.config.language.clone(),
             model: self.config.model.clone(),
             device: self.config.device.clone(),
@@ -407,7 +407,7 @@ fn ensure_faster_whisper_worker(
         .arg("--stdio")
         .env(
             "SONORA_FASTER_WHISPER_MODEL_CACHE",
-            config.model_cache_dir.to_string_lossy().to_string(),
+            path_to_sidecar_string(&config.model_cache_dir),
         )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -628,6 +628,7 @@ fn build_faster_whisper_runtime(spec: EngineSpec) -> RuntimeEngine {
             .collect::<Vec<_>>();
     let binary_path = resolve_faster_whisper_binary_path(spec.resource_dir.as_deref());
     let model_exists = is_resolvable_faster_whisper_model(&resolved_model_path);
+    let resolved_model_reference = normalize_path_for_sidecar(&resolved_model_path);
     let device = resolve_faster_whisper_device(spec.whisper_backend_preference).to_string();
     let compute_type =
         resolve_faster_whisper_compute_type(device.as_str(), spec.faster_whisper_compute_type)
@@ -642,7 +643,7 @@ fn build_faster_whisper_runtime(spec: EngineSpec) -> RuntimeEngine {
         RuntimeTranscriber::FasterWhisper(FasterWhisperSidecarTranscriber::new(
             FasterWhisperSidecarConfig {
                 binary_path: binary_path.clone(),
-                model: resolved_model_path.clone(),
+                model: resolved_model_reference,
                 model_cache_dir,
                 language: spec.language,
                 device: device.clone(),
@@ -949,6 +950,26 @@ fn default_faster_whisper_binary_name() -> &'static str {
     } else {
         "faster-whisper-worker"
     }
+}
+
+fn path_to_sidecar_string(path: &Path) -> String {
+    normalize_path_for_sidecar(&path.to_string_lossy())
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_path_for_sidecar(raw: &str) -> String {
+    if let Some(trimmed) = raw.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{trimmed}");
+    }
+    if let Some(trimmed) = raw.strip_prefix(r"\\?\") {
+        return trimmed.to_string();
+    }
+    raw.to_string()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn normalize_path_for_sidecar(raw: &str) -> String {
+    raw.to_string()
 }
 
 fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
