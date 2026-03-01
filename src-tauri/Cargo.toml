@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Offline cross-platform dictation app"
 authors = ["Sonora"]
 edition = "2021"
+default-run = "sonora-dictation"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

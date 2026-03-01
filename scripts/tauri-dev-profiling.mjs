@@ -3,10 +3,10 @@ import { spawn } from "node:child_process";
 
 const extraArgs = process.argv.slice(2);
 const args = ["tauri", "dev", ...extraArgs];
+const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
-const child = spawn("pnpm", args, {
+const child = spawn(pnpmCommand, args, {
   stdio: "inherit",
-  shell: process.platform === "win32",
   env: {
     ...process.env,
     SONORA_PERF: "1",
