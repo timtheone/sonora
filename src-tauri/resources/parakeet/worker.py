@@ -145,13 +145,20 @@ def handle_transcribe(runtime: ModelRuntime, request: dict):
 
     started_at = perf_counter()
     processor, model = runtime.get_model_bundle(model_name, device, compute_type)
+    model_dtype = next(model.parameters()).dtype
 
     audio = read_wav_mono_16k(audio_path)
     inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
-    inputs = {name: value.to(model.device) for name, value in inputs.items()}
+
+    prepared_inputs = {}
+    for name, value in inputs.items():
+        moved = value.to(model.device)
+        if torch.is_floating_point(moved):
+            moved = moved.to(model_dtype)
+        prepared_inputs[name] = moved
 
     with torch.inference_mode():
-        logits = model(**inputs).logits
+        logits = model(**prepared_inputs).logits
         token_ids = torch.argmax(logits, dim=-1)
 
     _ = language

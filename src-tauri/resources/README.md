@@ -32,6 +32,18 @@ Build parakeet worker with CUDA-enabled torch runtime:
 pnpm sidecar:setup:parakeet -- --force --backend cuda
 ```
 
+Fast dev loop (no PyInstaller rebuild):
+
+```bash
+pnpm sidecar:setup:parakeet:dev
+```
+
+Then set runtime override to use dev launcher:
+
+```powershell
+$env:SONORA_PARAKEET_BIN = "C:\Users\timur\dev\sonora\src-tauri\resources\bin\parakeet-worker-dev.cmd"
+```
+
 Prefetch model cache for offline faster-whisper usage:
 
 ```bash

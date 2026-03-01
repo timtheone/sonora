@@ -178,6 +178,18 @@ Optional: select CUDA wheel channel explicitly (default `cu124`):
 pnpm sidecar:setup:parakeet -- --force --backend cuda --torch-cuda-channel cu124
 ```
 
+Fast dev loop for parakeet (no PyInstaller rebuild, launcher points at `worker.py`):
+
+```bash
+pnpm sidecar:setup:parakeet:dev
+```
+
+Use dev launcher at runtime:
+
+```powershell
+$env:SONORA_PARAKEET_BIN = "C:\Users\timur\dev\sonora\src-tauri\resources\bin\parakeet-worker-dev.cmd"
+```
+
 Build installer bundles including whisper.cpp, faster-whisper, and parakeet sidecars:
 
 ```bash
@@ -207,6 +219,7 @@ Troubleshooting sidecar setup:
 - Selecting `nvidia/parakeet-tdt-0.6b-v3` in current app build will report engine unavailable with a NeMo requirement message.
 - whisper.cpp q8 bundle now includes `ggml-base.en-q8_0.bin`, `ggml-small.en-q8_0.bin`, and quality bundle includes `ggml-large-v3-turbo-q8_0.bin`.
 - Faster-whisper runtime binary override: set `SONORA_FASTER_WHISPER_BIN` before launching the app.
+- Parakeet runtime binary override: set `SONORA_PARAKEET_BIN` before launching the app.
 - Optional faster-whisper CUDA/cuDNN path override: set `SONORA_FASTER_WHISPER_EXTRA_PATH` (on Windows use `;` between paths).
 
 Example (Windows) to keep whisper.cpp on CUDA 13 and faster-whisper on CUDA 12 + cuDNN:

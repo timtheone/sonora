@@ -16,6 +16,7 @@
     "sidecar:setup:faster-whisper": "node scripts/setup-faster-whisper-sidecar.mjs",
     "sidecar:setup:parakeet": "node scripts/setup-parakeet-sidecar.mjs",
     "sidecar:setup:parakeet:cuda": "node scripts/setup-parakeet-sidecar.mjs --force --backend cuda",
+    "sidecar:setup:parakeet:dev": "node scripts/setup-parakeet-sidecar.mjs --backend cuda --dev-link",
     "perf:watch": "node scripts/perf-watch.mjs",
     "benchmark:devices": "cargo run --manifest-path src-tauri/Cargo.toml --bin transcription-bench -- devices",
     "benchmark:record": "cargo run --manifest-path src-tauri/Cargo.toml --bin transcription-bench -- record",

@@ -12,12 +12,19 @@ const venvDir = path.join(cacheRoot, "venv");
 const pyInstallerWorkDir = path.join(cacheRoot, "pyinstaller-work");
 const pyInstallerSpecDir = path.join(cacheRoot, "pyinstaller-spec");
 const outputDir = path.join(projectRoot, "src-tauri", "resources", "bin");
-const workerSource = path.join(projectRoot, "src-tauri", "resources", "parakeet", "worker.py");
+const workerSource = path.join(
+  projectRoot,
+  "src-tauri",
+  "resources",
+  "parakeet",
+  "worker.py",
+);
 
 const platform = process.platform;
-const executableName = platform === "win32" ? "parakeet-worker.exe" : "parakeet-worker";
+const executableName =
+  platform === "win32" ? "parakeet-worker.exe" : "parakeet-worker";
 const metadataFileName = "parakeet-sidecar.json";
-const DEFAULT_TORCH_CUDA_CHANNEL = "cu124";
+const DEFAULT_TORCH_CUDA_CHANNEL = "cu126";
 
 function hasNvidiaDriver() {
   const result = spawnSync("nvidia-smi", ["-L"], { encoding: "utf8" });
@@ -46,7 +53,9 @@ function resolveTorchChannel(value) {
   if (["cu118", "cu121", "cu124", "cu126"].includes(normalized)) {
     return normalized;
   }
-  throw new Error(`Unsupported torch CUDA channel '${value}'. Use cu118, cu121, cu124, or cu126.`);
+  throw new Error(
+    `Unsupported torch CUDA channel '${value}'. Use cu118, cu121, cu124, or cu126.`,
+  );
 }
 
 function resolveBuildBackend(requestedBackend) {
@@ -91,7 +100,9 @@ function runCommand(command, args, options = {}) {
     throw new Error(`Failed to start '${command}': ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(`Command failed (${result.status}): ${command} ${args.join(" ")}`);
+    throw new Error(
+      `Command failed (${result.status}): ${command} ${args.join(" ")}`,
+    );
   }
 }
 
@@ -105,13 +116,17 @@ function parseArgs(argv) {
       pythonCommand: null,
       requestedBackend: "auto",
       torchCudaChannel: DEFAULT_TORCH_CUDA_CHANNEL,
+      devLink: false,
     };
   }
 
   let pythonCommand = null;
-  let requestedBackend = parseBackend(process.env.SONORA_PARAKEET_BACKEND) ?? "auto";
-  let torchCudaChannel =
-    resolveTorchChannel(process.env.SONORA_PARAKEET_TORCH_CHANNEL ?? DEFAULT_TORCH_CUDA_CHANNEL);
+  let requestedBackend =
+    parseBackend(process.env.SONORA_PARAKEET_BACKEND) ?? "auto";
+  let torchCudaChannel = resolveTorchChannel(
+    process.env.SONORA_PARAKEET_TORCH_CHANNEL ?? DEFAULT_TORCH_CUDA_CHANNEL,
+  );
+  let devLink = args.includes("--dev-link");
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--python") {
@@ -132,7 +147,11 @@ function parseArgs(argv) {
       torchCudaChannel = resolveTorchChannel(args[i + 1]);
       i += 1;
     } else if (arg.startsWith("--torch-cuda-channel=")) {
-      torchCudaChannel = resolveTorchChannel(arg.slice("--torch-cuda-channel=".length));
+      torchCudaChannel = resolveTorchChannel(
+        arg.slice("--torch-cuda-channel=".length),
+      );
+    } else if (arg === "--dev-link") {
+      devLink = true;
     }
   }
 
@@ -142,6 +161,7 @@ function parseArgs(argv) {
     pythonCommand,
     requestedBackend,
     torchCudaChannel,
+    devLink,
   };
 }
 
@@ -151,7 +171,7 @@ function printHelp() {
       "Build the parakeet worker sidecar for current OS.",
       "",
       "Usage:",
-      "  pnpm sidecar:setup:parakeet [--force] [--backend auto|cpu|cuda] [--torch-cuda-channel cu124] [--python <command>]",
+      "  pnpm sidecar:setup:parakeet [--force] [--backend auto|cpu|cuda] [--torch-cuda-channel cu124] [--python <command>] [--dev-link]",
       "",
       "Options:",
       "  --force            Recreate Python virtual environment",
@@ -160,10 +180,12 @@ function printHelp() {
       "  --cuda             Shortcut for --backend cuda",
       "  --cpu              Shortcut for --backend cpu",
       "  --torch-cuda-channel  CUDA wheel channel (cu118|cu121|cu124|cu126)",
+      "  --dev-link         Create lightweight launcher (no PyInstaller bundle)",
       "",
       "Output:",
       `  src-tauri/resources/bin/${executableName}`,
       `  src-tauri/resources/bin/${metadataFileName}`,
+      "  src-tauri/resources/bin/parakeet-worker-dev(.cmd) [--dev-link]",
       "",
       "Requirements:",
       "  - Python 3.10+ with venv support",
@@ -226,7 +248,10 @@ async function ensureVenv(pythonCommand, force) {
 async function installDependencies(venvPython, backend, torchCudaChannel) {
   const versionResult = spawnSync(
     venvPython,
-    ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+    [
+      "-c",
+      "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    ],
     { encoding: "utf8" },
   );
   if (versionResult.status !== 0) {
@@ -243,7 +268,8 @@ async function installDependencies(venvPython, backend, torchCudaChannel) {
     throw new Error(`Unable to parse Python version '${detectedVersion}'`);
   }
 
-  const numpyRequirement = major > 3 || (major === 3 && minor >= 13) ? "numpy>=2,<3" : "numpy<2";
+  const numpyRequirement =
+    major > 3 || (major === 3 && minor >= 13) ? "numpy>=2,<3" : "numpy<2";
 
   process.stdout.write("Installing parakeet worker dependencies...\n");
   process.stdout.write(
@@ -298,7 +324,8 @@ async function buildWorkerBinary(venvPython) {
   await ensureDir(pyInstallerWorkDir);
   await ensureDir(pyInstallerSpecDir);
 
-  const outputBaseName = platform === "win32" ? "parakeet-worker" : "parakeet-worker";
+  const outputBaseName =
+    platform === "win32" ? "parakeet-worker" : "parakeet-worker";
 
   const args = [
     "-m",
@@ -343,8 +370,36 @@ async function buildWorkerBinary(venvPython) {
   runCommand(venvPython, args);
 }
 
-function smokeTestWorkerExecutable(expectedBackend) {
-  const executablePath = path.join(outputDir, executableName);
+async function createDevLinkLauncher(venvPython) {
+  await ensureDir(outputDir);
+
+  if (platform === "win32") {
+    const launcherPath = path.join(outputDir, "parakeet-worker-dev.cmd");
+    const contents = [
+      "@echo off",
+      "setlocal",
+      `\"${venvPython}\" \"${workerSource}\" %*`,
+      "endlocal",
+      "",
+    ].join("\r\n");
+    await fs.writeFile(launcherPath, contents, "utf8");
+    process.stdout.write(`Created dev-link launcher at ${launcherPath}\n`);
+    return launcherPath;
+  }
+
+  const launcherPath = path.join(outputDir, "parakeet-worker-dev");
+  const contents = [
+    "#!/usr/bin/env bash",
+    `\"${venvPython}\" \"${workerSource}\" \"$@\"`,
+    "",
+  ].join("\n");
+  await fs.writeFile(launcherPath, contents, "utf8");
+  await fs.chmod(launcherPath, 0o755);
+  process.stdout.write(`Created dev-link launcher at ${launcherPath}\n`);
+  return launcherPath;
+}
+
+function smokeTestWorkerExecutable(executablePath, expectedBackend) {
   if (!existsSync(executablePath)) {
     throw new Error(`Built worker executable not found at ${executablePath}`);
   }
@@ -354,12 +409,20 @@ function smokeTestWorkerExecutable(expectedBackend) {
     encoding: "utf8",
     env: {
       ...process.env,
-      SONORA_PARAKEET_MODEL_CACHE: path.join(projectRoot, "src-tauri", "resources", "models", "parakeet-cache"),
+      SONORA_PARAKEET_MODEL_CACHE: path.join(
+        projectRoot,
+        "src-tauri",
+        "resources",
+        "models",
+        "parakeet-cache",
+      ),
     },
   });
 
   if (probe.error) {
-    throw new Error(`Failed to launch built parakeet worker: ${probe.error.message}`);
+    throw new Error(
+      `Failed to launch built parakeet worker: ${probe.error.message}`,
+    );
   }
   if (probe.status !== 0) {
     throw new Error(
@@ -380,11 +443,15 @@ function smokeTestWorkerExecutable(expectedBackend) {
   try {
     parsed = JSON.parse(firstLine);
   } catch {
-    throw new Error(`Built parakeet worker smoke output is not JSON: ${firstLine}`);
+    throw new Error(
+      `Built parakeet worker smoke output is not JSON: ${firstLine}`,
+    );
   }
 
   if (parsed.id !== "smoke-test") {
-    throw new Error("Built parakeet worker smoke response did not match request id");
+    throw new Error(
+      "Built parakeet worker smoke response did not match request id",
+    );
   }
 
   const cudaAvailable = Boolean(parsed.cuda_available);
@@ -416,7 +483,11 @@ async function writeMetadata(metadata) {
     ...metadata,
   };
 
-  await fs.writeFile(metadataPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    metadataPath,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    "utf8",
+  );
   process.stdout.write(`Wrote sidecar metadata to ${metadataPath}\n`);
 }
 
@@ -451,9 +522,18 @@ async function main() {
   }
 
   await installDependencies(venvPython, resolvedBackend, torchCudaChannel);
-  await buildWorkerBinary(venvPython);
-  const runtimeInfo = smokeTestWorkerExecutable(resolvedBackend);
+  let runtimePath;
+  if (options.devLink) {
+    runtimePath = await createDevLinkLauncher(venvPython);
+  } else {
+    await buildWorkerBinary(venvPython);
+    runtimePath = path.join(outputDir, executableName);
+  }
+
+  const runtimeInfo = smokeTestWorkerExecutable(runtimePath, resolvedBackend);
   await writeMetadata({
+    mode: options.devLink ? "dev_link" : "bundled",
+    runtime_path: runtimePath,
     requested_backend: options.requestedBackend,
     resolved_backend: resolvedBackend,
     torch_cuda_channel: resolvedBackend === "cuda" ? torchCudaChannel : null,
@@ -464,6 +544,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${error instanceof Error ? error.message : String(error)}\n`,
+  );
   process.exitCode = 1;
 });
