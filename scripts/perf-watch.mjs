@@ -70,6 +70,7 @@ function formatRow(row, widths) {
   return [
     pad(row.chunk, widths.chunk),
     pad(row.engine, widths.engine),
+    pad(row.backend, widths.backend),
     pad(row.audio, widths.audio),
     pad(row.collect, widths.collect),
     pad(row.downsample, widths.downsample),
@@ -92,6 +93,7 @@ function renderTable(state) {
       return {
         chunk: chunk.chunk_id,
         engine: chunk.engine ?? "-",
+        backend: chunk.backend ?? "-",
         audio: formatMs(chunk.chunk_audio_ms),
         collect: formatMs(chunk.collect_ms),
         downsample: formatMs(chunk.downsample_ms),
@@ -107,6 +109,7 @@ function renderTable(state) {
   const widths = {
     chunk: 6,
     engine: 14,
+    backend: 8,
     audio: 8,
     collect: 9,
     downsample: 9,
@@ -147,6 +150,7 @@ function renderTable(state) {
     {
       chunk: "chunk",
       engine: "engine",
+      backend: "backend",
       audio: "audio_ms",
       collect: "collect",
       downsample: "downsmpl",

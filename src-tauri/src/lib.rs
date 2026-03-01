@@ -196,6 +196,7 @@ struct PerfChunkTrace {
     chunk_id: u64,
     engine: String,
     model: String,
+    backend: String,
     source_sample_rate_hz: u32,
     chunk_samples: usize,
     chunk_audio_ms: u64,
@@ -941,6 +942,7 @@ fn run_transcription_worker(
                 chunk_id,
                 engine: metrics.engine,
                 model: metrics.model,
+                backend: metrics.backend,
                 source_sample_rate_hz,
                 chunk_samples: chunk.len(),
                 chunk_audio_ms: (chunk.len() as u64).saturating_mul(1_000) / 16_000,
@@ -1149,6 +1151,22 @@ fn phase1_start_live_capture(
     let selected_microphone = microphone_id
         .map(|value| value.trim().to_string())
         .and_then(|value| if value.is_empty() { None } else { Some(value) });
+
+    {
+        let pipeline_guard = store
+            .pipeline
+            .lock()
+            .map_err(|_| "failed to acquire pipeline state".to_string())?;
+        if let Err(error) = pipeline_guard.prepare_transcriber() {
+            let _ = log_store::append(
+                &logs.path,
+                "error",
+                "transcriber.prepare",
+                &format!("failed to prepare transcriber before live capture: {error}"),
+            );
+            return Err(error);
+        }
+    }
 
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let worker = thread::spawn(move || {

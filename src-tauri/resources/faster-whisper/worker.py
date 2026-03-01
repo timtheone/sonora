@@ -4,6 +4,8 @@
 import json
 import os
 import sys
+import tempfile
+import wave
 from time import perf_counter
 
 from faster_whisper import WhisperModel
@@ -87,10 +89,19 @@ def handle_preload(runtime: ModelRuntime, request: dict):
     model_name = str(request.get("model", "small.en")).strip() or "small.en"
     device = str(request.get("device", "cpu")).strip() or "cpu"
     compute_type = str(request.get("compute_type", "int8")).strip() or "int8"
+    language = str(request.get("language", "en")).strip() or "en"
+    warmup = bool(request.get("warmup", False))
 
     started_at = perf_counter()
-    runtime.get_model(model_name, device, compute_type)
-    duration_ms = int((perf_counter() - started_at) * 1000)
+    model = runtime.get_model(model_name, device, compute_type)
+    load_ms = int((perf_counter() - started_at) * 1000)
+
+    warmup_ms = 0
+    if warmup:
+        warmup_started_at = perf_counter()
+        run_warmup_inference(model, language)
+        warmup_ms = int((perf_counter() - warmup_started_at) * 1000)
+
     write_response(
         {
             "id": request_id,
@@ -98,9 +109,37 @@ def handle_preload(runtime: ModelRuntime, request: dict):
             "model": model_name,
             "device": device,
             "compute_type": compute_type,
-            "load_ms": duration_ms,
+            "load_ms": load_ms,
+            "warmup_ms": warmup_ms,
         }
     )
+
+
+def run_warmup_inference(model, language: str):
+    warmup_samples = 16000
+    handle, warmup_path = tempfile.mkstemp(prefix="sonora-fw-warmup-", suffix=".wav")
+    os.close(handle)
+    try:
+        with wave.open(warmup_path, "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(16000)
+            writer.writeframes(b"\x00\x00" * warmup_samples)
+
+        segments, _ = model.transcribe(
+            warmup_path,
+            language=language,
+            beam_size=1,
+            condition_on_previous_text=False,
+            vad_filter=False,
+        )
+        for _ in segments:
+            pass
+    finally:
+        try:
+            os.remove(warmup_path)
+        except OSError:
+            pass
 
 
 def handle_ping(request: dict):

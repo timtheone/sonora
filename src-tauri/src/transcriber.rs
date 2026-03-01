@@ -20,11 +20,19 @@ const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
 pub trait Transcriber: Send + Sync {
     fn transcribe(&self, samples: &[f32]) -> Result<String, String>;
 
+    fn prepare(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn engine_label(&self) -> &'static str {
         "unknown"
     }
 
     fn model_label(&self) -> String {
+        "unknown".to_string()
+    }
+
+    fn backend_label(&self) -> String {
         "unknown".to_string()
     }
 }
@@ -39,6 +47,10 @@ impl Transcriber for StubTranscriber {
 
     fn engine_label(&self) -> &'static str {
         "stub"
+    }
+
+    fn backend_label(&self) -> String {
+        "stub".to_string()
     }
 }
 
@@ -217,6 +229,10 @@ impl Transcriber for WhisperSidecarTranscriber {
     fn model_label(&self) -> String {
         self.config.model_path.to_string_lossy().to_string()
     }
+
+    fn backend_label(&self) -> String {
+        self.config.compute_backend.as_label().to_string()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +257,7 @@ struct FasterWhisperWorker {
 pub struct FasterWhisperSidecarTranscriber {
     pub config: FasterWhisperSidecarConfig,
     worker: Arc<Mutex<Option<FasterWhisperWorker>>>,
+    preloaded: Arc<Mutex<bool>>,
 }
 
 impl FasterWhisperSidecarTranscriber {
@@ -248,6 +265,7 @@ impl FasterWhisperSidecarTranscriber {
         Self {
             config,
             worker: Arc::new(Mutex::new(None)),
+            preloaded: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -255,6 +273,8 @@ impl FasterWhisperSidecarTranscriber {
         if samples.is_empty() {
             return Err("cannot transcribe empty audio chunk".to_string());
         }
+
+        self.prepare_impl()?;
 
         let token = temporary_token();
         let temp_dir = std::env::temp_dir();
@@ -359,11 +379,95 @@ impl FasterWhisperSidecarTranscriber {
         }
 
         let normalized = response.text.unwrap_or_default().trim().to_string();
-        if normalized.is_empty() {
-            return Err("faster-whisper worker returned empty transcript".to_string());
+        Ok(normalized)
+    }
+
+    fn prepare_impl(&self) -> Result<(), String> {
+        {
+            let preloaded = self
+                .preloaded
+                .lock()
+                .map_err(|_| "failed to acquire faster-whisper preloaded lock".to_string())?;
+            if *preloaded {
+                return Ok(());
+            }
         }
 
-        Ok(normalized)
+        let mut guard = self
+            .worker
+            .lock()
+            .map_err(|_| "failed to acquire faster-whisper worker lock".to_string())?;
+        ensure_faster_whisper_worker(&mut guard, &self.config)?;
+
+        let preload_request = FasterWhisperPreloadRequest {
+            op: "preload".to_string(),
+            id: "preload-runtime".to_string(),
+            model: self.config.model.clone(),
+            language: self.config.language.clone(),
+            device: self.config.device.clone(),
+            compute_type: self.config.compute_type.clone(),
+            warmup: self.config.device == "cuda",
+        };
+        let payload = serde_json::to_string(&preload_request).map_err(|error| {
+            format!("failed to serialize faster-whisper preload request: {error}")
+        })?;
+
+        let worker = match guard.as_mut() {
+            Some(worker) => worker,
+            None => return Err("faster-whisper worker was not initialized".to_string()),
+        };
+
+        worker
+            .stdin
+            .write_all(payload.as_bytes())
+            .map_err(|error| format!("failed to write faster-whisper preload request: {error}"))?;
+        worker.stdin.write_all(b"\n").map_err(|error| {
+            format!("failed to finalize faster-whisper preload request: {error}")
+        })?;
+        worker
+            .stdin
+            .flush()
+            .map_err(|error| format!("failed to flush faster-whisper preload request: {error}"))?;
+
+        let mut response = None;
+        for _ in 0..64 {
+            let mut line = String::new();
+            let bytes_read = worker.stdout.read_line(&mut line).map_err(|error| {
+                format!("failed to read faster-whisper preload response: {error}")
+            })?;
+            if bytes_read == 0 {
+                *guard = None;
+                return Err("faster-whisper worker closed stdout during preload".to_string());
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Ok(parsed) = serde_json::from_str::<FasterWhisperResponse>(trimmed) {
+                if parsed.id.as_deref() == Some("preload-runtime") {
+                    response = Some(parsed);
+                    break;
+                }
+            }
+        }
+
+        let response = response
+            .ok_or_else(|| "did not receive faster-whisper preload response".to_string())?;
+        if !response.ok {
+            return Err(response
+                .error
+                .unwrap_or_else(|| "faster-whisper preload failed".to_string()));
+        }
+
+        let mut preloaded = self
+            .preloaded
+            .lock()
+            .map_err(|_| "failed to acquire faster-whisper preloaded lock".to_string())?;
+        *preloaded = true;
+
+        Ok(())
     }
 }
 
@@ -372,12 +476,20 @@ impl Transcriber for FasterWhisperSidecarTranscriber {
         self.transcribe_impl(samples)
     }
 
+    fn prepare(&self) -> Result<(), String> {
+        self.prepare_impl()
+    }
+
     fn engine_label(&self) -> &'static str {
         "faster_whisper"
     }
 
     fn model_label(&self) -> String {
         self.config.model.clone()
+    }
+
+    fn backend_label(&self) -> String {
+        self.config.device.clone()
     }
 }
 
@@ -391,6 +503,17 @@ struct FasterWhisperRequest {
     device: String,
     compute_type: String,
     beam_size: u8,
+}
+
+#[derive(Debug, Serialize)]
+struct FasterWhisperPreloadRequest {
+    op: String,
+    id: String,
+    model: String,
+    language: String,
+    device: String,
+    compute_type: String,
+    warmup: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,6 +660,15 @@ impl Transcriber for RuntimeTranscriber {
         }
     }
 
+    fn prepare(&self) -> Result<(), String> {
+        match self {
+            RuntimeTranscriber::Stub(stub) => stub.prepare(),
+            RuntimeTranscriber::Unavailable { reason } => Err(reason.clone()),
+            RuntimeTranscriber::Whisper(runtime) => runtime.prepare(),
+            RuntimeTranscriber::FasterWhisper(runtime) => runtime.prepare(),
+        }
+    }
+
     fn engine_label(&self) -> &'static str {
         match self {
             RuntimeTranscriber::Whisper(runtime) => runtime.engine_label(),
@@ -552,6 +684,15 @@ impl Transcriber for RuntimeTranscriber {
             RuntimeTranscriber::FasterWhisper(runtime) => runtime.model_label(),
             RuntimeTranscriber::Stub(stub) => stub.model_label(),
             RuntimeTranscriber::Unavailable { .. } => "unknown".to_string(),
+        }
+    }
+
+    fn backend_label(&self) -> String {
+        match self {
+            RuntimeTranscriber::Whisper(runtime) => runtime.backend_label(),
+            RuntimeTranscriber::FasterWhisper(runtime) => runtime.backend_label(),
+            RuntimeTranscriber::Stub(stub) => stub.backend_label(),
+            RuntimeTranscriber::Unavailable { .. } => "unavailable".to_string(),
         }
     }
 }

@@ -6,7 +6,7 @@ function RecentTranscriptsPanelComponent() {
 
   return (
     <section className="panel">
-      <h2>Recent transcripts (last 3)</h2>
+      <h2>Recent transcripts (last 8)</h2>
       {recentTranscripts.length === 0 ? (
         <p>No transcripts emitted yet.</p>
       ) : (

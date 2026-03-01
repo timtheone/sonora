@@ -9,32 +9,24 @@ import {
   effectiveChunkDurationMs,
   effectivePartialCadenceMs,
 } from "../domain/settings";
-import { appendInsertionRecord } from "../domain/insertion-history";
 import {
   cancelPhase1,
   listPhase1Microphones,
   sendPhase1HotkeyDown,
-  sendPhase1HotkeyUp,
-  setPhase1Mode,
   getPhase1Status,
-  type DictationMode,
   type DictationState,
   type TranscriptPayload,
   type PipelineStatus,
 } from "../services/phase1";
 import {
-  getPhase2RecentInsertions,
   getPhase2Settings,
-  insertPhase2Text,
   updatePhase2Settings,
-  type InsertionRecord,
   type SttEngine,
 } from "../services/phase2";
 import {
   autoSelectHardwareProfile,
   getHardwareProfileStatus,
   getModelStatus,
-  setModelPath,
   type HardwareProfileStatus,
   type ModelStatus,
 } from "../services/phase3";
@@ -61,12 +53,19 @@ function isTauriRuntime(): boolean {
   return Boolean(windowWithTauri.__TAURI_INTERNALS__);
 }
 
+function defaultWhisperModelPath(): string {
+  return "models/ggml-base.en-q5_1.bin";
+}
+
+function defaultFasterWhisperModel(): string {
+  return "distil-large-v3";
+}
+
 export function useAppController() {
   const [available, setAvailable] = useState(false);
   const [state, setState] = useState<DictationState>(FALLBACK_STATE);
-  const [mode, setMode] = useState<DictationMode>(DEFAULT_SETTINGS.mode);
+  const [mode, setMode] = useState(DEFAULT_SETTINGS.mode);
   const [recentTranscripts, setRecentTranscripts] = useState<string[]>([]);
-  const [insertions, setInsertions] = useState<InsertionRecord[]>([]);
   const [hotkey, setHotkey] = useState(DEFAULT_SETTINGS.hotkey);
   const [modelProfile, setModelProfile] = useState<"fast" | "balanced">(
     DEFAULT_SETTINGS.modelProfile,
@@ -153,7 +152,6 @@ export function useAppController() {
     Promise.all([
       getPhase1Status(),
       getPhase2Settings(),
-      getPhase2RecentInsertions(),
       getHardwareProfileStatus(),
       getModelStatus(),
       getEnvironmentHealth(),
@@ -165,7 +163,6 @@ export function useAppController() {
         ([
           phase1Status,
           settings,
-          recentInsertions,
           hardware,
           profileStatus,
           envHealth,
@@ -192,7 +189,6 @@ export function useAppController() {
           setFasterWhisperBeamSize(Math.max(1, Math.min(8, settings.faster_whisper_beam_size)));
           setClipboardFallback(settings.clipboard_fallback);
           setLaunchAtStartup(settings.launch_at_startup);
-          setInsertions(recentInsertions);
           setHardwareProfile(hardware);
           setModelStatus(profileStatus);
           setEnvironmentHealth(envHealth);
@@ -217,7 +213,7 @@ export function useAppController() {
     const unlistenTranscript = listen<TranscriptPayload>(
       "dictation:transcript",
       (event) => {
-        setRecentTranscripts((previous) => [event.payload.text, ...previous].slice(0, 3));
+        setRecentTranscripts((previous) => [event.payload.text, ...previous].slice(0, 8));
         if (
           typeof event.payload.chunk_id === "number" &&
           typeof event.payload.emitted_unix_ms === "number"
@@ -231,44 +227,15 @@ export function useAppController() {
       },
     );
 
-    const unlistenInsertion = listen<InsertionRecord>("dictation:insertion", (event) => {
-      setInsertions((previous) => appendInsertionRecord(previous, event.payload));
-    });
-
     return () => {
       unlistenTranscript.then((dispose) => dispose());
-      unlistenInsertion.then((dispose) => dispose());
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, []);
 
-  async function updateMode(nextMode: DictationMode) {
-    try {
-      const status = await setPhase1Mode(nextMode);
-      applyPhaseStatus(status);
-      setError(null);
-      return status;
-    } catch (cause) {
-      setError(String(cause));
-      return null;
-    }
-  }
-
   async function onHotkeyDown() {
     try {
       const status = await sendPhase1HotkeyDown();
-      applyPhaseStatus(status);
-      setError(null);
-      return status;
-    } catch (cause) {
-      setError(String(cause));
-      return null;
-    }
-  }
-
-  async function onHotkeyUp() {
-    try {
-      const status = await sendPhase1HotkeyUp();
       applyPhaseStatus(status);
       setError(null);
       return status;
@@ -292,12 +259,19 @@ export function useAppController() {
 
   async function saveSettings() {
     try {
+      const selectedWhisperModelPath = modelPath.trim()
+        ? modelPath.trim()
+        : defaultWhisperModelPath();
+      const selectedFasterWhisperModel = fasterWhisperModel.trim()
+        ? fasterWhisperModel.trim()
+        : defaultFasterWhisperModel();
+
       const updated = await updatePhase2Settings({
         hotkey,
         mode,
         model_profile: modelProfile,
         stt_engine: sttEngine,
-        model_path: modelPath.trim() ? modelPath.trim() : null,
+        model_path: selectedWhisperModelPath,
         microphone_id: selectedMicrophoneId.trim() ? selectedMicrophoneId : null,
         mic_sensitivity_percent: Math.max(50, Math.min(300, Math.round(micSensitivityPercent))),
         chunk_duration_ms: Math.max(
@@ -309,7 +283,7 @@ export function useAppController() {
           Math.min(PARTIAL_CADENCE_MAX_MS, Math.round(partialCadenceMs)),
         ),
         whisper_backend_preference: whisperBackendPreference,
-        faster_whisper_model: fasterWhisperModel.trim() ? fasterWhisperModel.trim() : null,
+        faster_whisper_model: selectedFasterWhisperModel,
         faster_whisper_compute_type: fasterWhisperComputeType,
         faster_whisper_beam_size: Math.max(1, Math.min(8, Math.round(fasterWhisperBeamSize))),
         clipboard_fallback: clipboardFallback,
@@ -345,16 +319,6 @@ export function useAppController() {
     }
   }
 
-  async function insertText(text: string) {
-    try {
-      const record = await insertPhase2Text(text);
-      setInsertions((previous) => appendInsertionRecord(previous, record));
-      setError(null);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
   async function detectAndApplyProfile() {
     try {
       const updatedSettings = await autoSelectHardwareProfile();
@@ -380,23 +344,6 @@ export function useAppController() {
         Math.max(1, Math.min(8, updatedSettings.faster_whisper_beam_size)),
       );
       setTranscriberStatus(await getTranscriberStatus());
-      setSettingsSavedAt(new Date().toLocaleTimeString());
-      setError(null);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  }
-
-  async function saveModelPathOnly() {
-    try {
-      const updated = await setModelPath(modelPath.trim() ? modelPath.trim() : null);
-      setModelPathInput(updated.model_path ?? "");
-      const [status, runtimeTranscriber] = await Promise.all([
-        getModelStatus(),
-        getTranscriberStatus(),
-      ]);
-      setModelStatus(status);
-      setTranscriberStatus(runtimeTranscriber);
       setSettingsSavedAt(new Date().toLocaleTimeString());
       setError(null);
     } catch (cause) {
@@ -456,7 +403,6 @@ export function useAppController() {
     mode,
     statusLabel,
     recentTranscripts,
-    insertions,
     hotkey,
     modelProfile,
     sttEngine,
@@ -495,14 +441,10 @@ export function useAppController() {
     setFasterWhisperBeamSize,
     setClipboardFallback,
     setLaunchAtStartup,
-    updateMode,
     onHotkeyDown,
-    onHotkeyUp,
     onCancel,
     saveSettings,
-    insertText,
     detectAndApplyProfile,
-    saveModelPathOnly,
     refreshPhase4Health,
     clearLogs,
     acknowledgeRecovery,

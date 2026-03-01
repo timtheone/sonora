@@ -15,10 +15,7 @@ import {
 function Phase1ControlsComponent() {
   const {
     available,
-    mode,
-    updateMode,
     onHotkeyDown,
-    onHotkeyUp,
     onCancel,
     syncPhaseStatus,
     selectedMicrophoneId,
@@ -113,32 +110,11 @@ function Phase1ControlsComponent() {
       <p className="muted">Live mic: {liveMicActive ? "active" : "inactive"}</p>
       <MicLevelPeakIndicator ref={indicatorRef} />
       <div className="actions">
-        <button
-          disabled={!available || mode === "push_to_toggle"}
-          onClick={() => updateMode("push_to_toggle")}
-        >
-          Use Toggle Mode
-        </button>
-        <button
-          disabled={!available || mode === "push_to_talk"}
-          onClick={() => updateMode("push_to_talk")}
-        >
-          Use Push Mode
-        </button>
-        <button disabled={!available} onClick={onHotkeyDown}>
-          Hotkey Down
-        </button>
-        <button disabled={!available} onClick={onHotkeyUp}>
-          Hotkey Up
-        </button>
         <button disabled={!available || liveMicActive} onClick={startLiveMic}>
           Start Live Mic
         </button>
         <button disabled={!available || !liveMicActive} onClick={stopLiveMic}>
           Stop Live Mic
-        </button>
-        <button disabled={!available} onClick={onCancel}>
-          Cancel
         </button>
       </div>
     </section>

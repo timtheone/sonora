@@ -1,15 +1,36 @@
 import { memo } from "react";
-import type { DictationMode } from "../services/phase1";
 import { useAppControllerContext } from "../context/AppControllerContext";
 
+const WHISPER_CPP_MODELS = [
+  {
+    value: "models/ggml-tiny.en-q8_0.bin",
+    label: "tiny.en q8 (fastest)",
+  },
+  {
+    value: "models/ggml-base.en-q5_1.bin",
+    label: "base.en q5_1 (balanced)",
+  },
+  {
+    value: "models/ggml-base.en-q8_0.bin",
+    label: "base.en q8",
+  },
+  {
+    value: "models/ggml-small.en-q8_0.bin",
+    label: "small.en q8",
+  },
+  {
+    value: "models/ggml-large-v3-turbo-q8_0.bin",
+    label: "large-v3-turbo q8 (quality)",
+  },
+] as const;
+
 const FASTER_WHISPER_MODEL_PRESETS = ["small.en", "distil-large-v3", "large-v3"] as const;
+const DEFAULT_WHISPER_MODEL = "models/ggml-base.en-q5_1.bin";
+const DEFAULT_FASTER_WHISPER_MODEL = "distil-large-v3";
 
 function Phase2SettingsPanelComponent() {
   const {
     available,
-    hotkey,
-    mode,
-    modelProfile,
     sttEngine,
     modelPath,
     selectedMicrophoneId,
@@ -24,9 +45,6 @@ function Phase2SettingsPanelComponent() {
     clipboardFallback,
     launchAtStartup,
     settingsSavedAt,
-    setHotkey,
-    setMode,
-    setModelProfile,
     setSttEngine,
     setModelPathInput,
     setSelectedMicrophoneId,
@@ -40,52 +58,22 @@ function Phase2SettingsPanelComponent() {
     setClipboardFallback,
     setLaunchAtStartup,
     saveSettings,
-    saveModelPathOnly,
     refreshMicrophones,
   } = useAppControllerContext();
+
+  const whisperSelectedModel = WHISPER_CPP_MODELS.some((entry) => entry.value === modelPath)
+    ? modelPath
+    : DEFAULT_WHISPER_MODEL;
 
   const fasterWhisperPresetValue = FASTER_WHISPER_MODEL_PRESETS.includes(
     fasterWhisperModel as (typeof FASTER_WHISPER_MODEL_PRESETS)[number],
   )
     ? fasterWhisperModel
-    : "custom";
+    : DEFAULT_FASTER_WHISPER_MODEL;
 
   return (
     <section className="panel">
       <h2>Phase 2 Settings</h2>
-      <label className="field">
-        <span>Hotkey</span>
-        <input
-          disabled={!available}
-          value={hotkey}
-          onChange={(event) => setHotkey(event.currentTarget.value)}
-          placeholder="CtrlOrCmd+Shift+U"
-        />
-      </label>
-      <label className="field">
-        <span>Mode</span>
-        <select
-          disabled={!available}
-          value={mode}
-          onChange={(event) => setMode(event.currentTarget.value as DictationMode)}
-        >
-          <option value="push_to_toggle">Push to toggle</option>
-          <option value="push_to_talk">Push to talk</option>
-        </select>
-      </label>
-      <label className="field">
-        <span>Model profile</span>
-        <select
-          disabled={!available}
-          value={modelProfile}
-          onChange={(event) =>
-            setModelProfile(event.currentTarget.value as "fast" | "balanced")
-          }
-        >
-          <option value="balanced">Balanced (base.en quantized)</option>
-          <option value="fast">Fast (tiny.en quantized)</option>
-        </select>
-      </label>
       <label className="field">
         <span>Transcription engine</span>
         <select
@@ -105,43 +93,33 @@ function Phase2SettingsPanelComponent() {
       <p className="muted">Current faster-whisper presets are tuned for English dictation.</p>
       {sttEngine === "whisper_cpp" ? (
         <label className="field">
-          <span>Model path override (optional)</span>
-          <input
+          <span>whisper.cpp model</span>
+          <select
             disabled={!available}
-            value={modelPath}
+            value={whisperSelectedModel}
             onChange={(event) => setModelPathInput(event.currentTarget.value)}
-            placeholder="models/ggml-base.en-q5_1.bin"
-          />
+          >
+            {WHISPER_CPP_MODELS.map((entry) => (
+              <option key={entry.value} value={entry.value}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
         </label>
       ) : null}
       {sttEngine === "faster_whisper" ? (
         <>
           <label className="field">
-            <span>faster-whisper preset</span>
+            <span>faster-whisper model</span>
             <select
               disabled={!available}
               value={fasterWhisperPresetValue}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                if (value !== "custom") {
-                  setFasterWhisperModel(value);
-                }
-              }}
+              onChange={(event) => setFasterWhisperModel(event.currentTarget.value)}
             >
               <option value="small.en">small.en</option>
               <option value="distil-large-v3">distil-large-v3</option>
               <option value="large-v3">large-v3</option>
-              <option value="custom">Custom value</option>
             </select>
-          </label>
-          <label className="field">
-            <span>faster-whisper model</span>
-            <input
-              disabled={!available}
-              value={fasterWhisperModel}
-              onChange={(event) => setFasterWhisperModel(event.currentTarget.value)}
-              placeholder="small.en"
-            />
           </label>
           <label className="field">
             <span>faster-whisper compute type</span>
@@ -260,9 +238,6 @@ function Phase2SettingsPanelComponent() {
       <div className="actions">
         <button disabled={!available} onClick={saveSettings}>
           Save Settings
-        </button>
-        <button disabled={!available || sttEngine !== "whisper_cpp"} onClick={saveModelPathOnly}>
-          Save Model Path
         </button>
         <button disabled={!available} onClick={refreshMicrophones}>
           Refresh Microphones

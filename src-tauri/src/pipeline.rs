@@ -40,6 +40,7 @@ pub struct ChunkProcessMetrics {
     pub inference_ms: u64,
     pub engine: String,
     pub model: String,
+    pub backend: String,
     pub transcript: Option<String>,
 }
 
@@ -79,6 +80,10 @@ impl<T: Transcriber> DictationPipeline<T> {
 
     pub fn set_transcriber(&mut self, transcriber: T) {
         self.transcriber = transcriber;
+    }
+
+    pub fn prepare_transcriber(&self) -> Result<(), String> {
+        self.transcriber.prepare()
     }
 
     pub fn on_hotkey_down(&mut self) {
@@ -121,6 +126,7 @@ impl<T: Transcriber> DictationPipeline<T> {
             inference_ms: 0,
             engine: self.transcriber.engine_label().to_string(),
             model: self.transcriber.model_label(),
+            backend: self.transcriber.backend_label(),
             transcript: None,
         };
 
