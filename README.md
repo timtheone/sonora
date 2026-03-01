@@ -114,7 +114,15 @@ pnpm model:download -- --engine faster_whisper
 pnpm model:download -- --engine faster_whisper --faster-models small.en,distil-large-v3,large-v3
 ```
 
-Download both whisper.cpp and faster-whisper model bundles:
+Download parakeet models (Transformers-compatible CTC variants):
+
+```bash
+pnpm model:download -- --engine parakeet
+pnpm model:download -- --engine parakeet --parakeet-models nvidia/parakeet-ctc-0.6b,nvidia/parakeet-ctc-1.1b
+pnpm model:download -- --engine parakeet --parakeet-models nvidia/parakeet-tdt-0.6b-v3
+```
+
+Download all engine bundles (whisper.cpp + faster-whisper + parakeet):
 
 ```bash
 pnpm model:download -- all --engine all
@@ -152,7 +160,13 @@ Build faster-whisper worker sidecar (packaged worker executable):
 pnpm sidecar:setup:faster-whisper
 ```
 
-Build installer bundles including both whisper.cpp and faster-whisper sidecars:
+Build parakeet worker sidecar (packaged worker executable):
+
+```bash
+pnpm sidecar:setup:parakeet
+```
+
+Build installer bundles including whisper.cpp, faster-whisper, and parakeet sidecars:
 
 ```bash
 pnpm tauri:build:full
@@ -171,7 +185,11 @@ Troubleshooting sidecar setup:
 - Optional whisper.cpp CUDA runtime path override: set `SONORA_WHISPER_EXTRA_PATH` (PATH-style list).
 - Faster-whisper worker setup requires Python 3.10+ and internet access during build.
 - Faster-whisper model cache is written to `src-tauri/resources/models/faster-whisper-cache`.
+- Parakeet model cache is written to `src-tauri/resources/models/parakeet-cache`.
 - Default faster-whisper bundle includes English models: `small.en`, `distil-large-v3`, `large-v3`.
+- Default parakeet bundle includes `nvidia/parakeet-ctc-0.6b` and `nvidia/parakeet-ctc-1.1b`.
+- `nvidia/parakeet-tdt-0.6b-v3` is downloadable but currently requires a NeMo-based worker for inference.
+- Selecting `nvidia/parakeet-tdt-0.6b-v3` in current app build will report engine unavailable with a NeMo requirement message.
 - whisper.cpp q8 bundle now includes `ggml-base.en-q8_0.bin`, `ggml-small.en-q8_0.bin`, and quality bundle includes `ggml-large-v3-turbo-q8_0.bin`.
 - Faster-whisper runtime binary override: set `SONORA_FASTER_WHISPER_BIN` before launching the app.
 - Optional faster-whisper CUDA/cuDNN path override: set `SONORA_FASTER_WHISPER_EXTRA_PATH` (on Windows use `;` between paths).
@@ -223,8 +241,9 @@ pnpm tauri:build
 - Runtime transcriber now attempts whisper.cpp sidecar execution when binary + model are available.
 - Settings UI includes latency tuning controls (chunk duration + partial cadence) for live experimentation.
 - Settings UI includes inference backend preference (`auto`/`cpu`/`cuda`) so GPU usage can be toggled without env vars.
-- Settings UI includes an STT engine selector (`whisper.cpp` or `faster-whisper`).
+- Settings UI includes an STT engine selector (`whisper.cpp`, `faster-whisper`, or `parakeet`).
 - Faster-whisper settings now include model id/path, compute type, and beam size controls.
+- Parakeet settings include model id/path and compute type controls.
 - Set `SONORA_PERF=1` to enable chunk-level perf trace events in runtime logs.
 - `pnpm perf:watch` reads those events and renders a live timing table (`capture/queue/VAD/inference/emit`).
 - `pnpm perf:watch` now reports speech-chunk ratio and speech-only p50/p95 inference latency.
@@ -232,4 +251,5 @@ pnpm tauri:build
 - Model binaries are downloaded via `pnpm model:download` into `src-tauri/resources/models/`.
 - Sidecar binary is generated via `pnpm sidecar:setup` into `src-tauri/resources/bin/`.
 - Faster-whisper worker binary is generated via `pnpm sidecar:setup:faster-whisper` into `src-tauri/resources/bin/`.
+- Parakeet worker binary is generated via `pnpm sidecar:setup:parakeet` into `src-tauri/resources/bin/`.
 - Phase 2 includes a high-accuracy preset and VAD controls (threshold + benchmark disable switch).

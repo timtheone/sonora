@@ -25,8 +25,14 @@ const WHISPER_CPP_MODELS = [
 ] as const;
 
 const FASTER_WHISPER_MODEL_PRESETS = ["small.en", "distil-large-v3", "large-v3"] as const;
+const PARAKEET_MODEL_PRESETS = [
+  "nvidia/parakeet-ctc-0.6b",
+  "nvidia/parakeet-ctc-1.1b",
+  "nvidia/parakeet-tdt-0.6b-v3",
+] as const;
 const DEFAULT_WHISPER_MODEL = "models/ggml-base.en-q5_1.bin";
 const DEFAULT_FASTER_WHISPER_MODEL = "distil-large-v3";
+const DEFAULT_PARAKEET_MODEL = "nvidia/parakeet-ctc-0.6b";
 
 function Phase2SettingsPanelComponent() {
   const {
@@ -41,6 +47,8 @@ function Phase2SettingsPanelComponent() {
     fasterWhisperModel,
     fasterWhisperComputeType,
     fasterWhisperBeamSize,
+    parakeetModel,
+    parakeetComputeType,
     vadDisabled,
     vadRmsThresholdMilli,
     availableMicrophones,
@@ -57,6 +65,8 @@ function Phase2SettingsPanelComponent() {
     setFasterWhisperModel,
     setFasterWhisperComputeType,
     setFasterWhisperBeamSize,
+    setParakeetModel,
+    setParakeetComputeType,
     setVadDisabled,
     setVadRmsThresholdMilli,
     setClipboardFallback,
@@ -76,6 +86,12 @@ function Phase2SettingsPanelComponent() {
     ? fasterWhisperModel
     : DEFAULT_FASTER_WHISPER_MODEL;
 
+  const parakeetPresetValue = PARAKEET_MODEL_PRESETS.includes(
+    parakeetModel as (typeof PARAKEET_MODEL_PRESETS)[number],
+  )
+    ? parakeetModel
+    : DEFAULT_PARAKEET_MODEL;
+
   return (
     <section className="panel">
       <h2>Phase 2 Settings</h2>
@@ -85,15 +101,19 @@ function Phase2SettingsPanelComponent() {
           disabled={!available}
           value={sttEngine}
           onChange={(event) =>
-            setSttEngine(event.currentTarget.value as "whisper_cpp" | "faster_whisper")
+            setSttEngine(event.currentTarget.value as "whisper_cpp" | "faster_whisper" | "parakeet")
           }
         >
           <option value="whisper_cpp">whisper.cpp sidecar</option>
           <option value="faster_whisper">faster-whisper</option>
+          <option value="parakeet">parakeet (transformers)</option>
         </select>
       </label>
       <p className="muted">
         faster-whisper requires worker setup via <code>pnpm sidecar:setup:faster-whisper</code>.
+      </p>
+      <p className="muted">
+        parakeet requires worker setup via <code>pnpm sidecar:setup:parakeet</code>.
       </p>
       <p className="muted">Current faster-whisper presets are tuned for English dictation.</p>
       <div className="actions">
@@ -160,6 +180,44 @@ function Phase2SettingsPanelComponent() {
               onChange={(event) => setFasterWhisperBeamSize(Number(event.currentTarget.value))}
             />
           </label>
+        </>
+      ) : null}
+      {sttEngine === "parakeet" ? (
+        <>
+          <label className="field">
+            <span>parakeet model</span>
+            <select
+              disabled={!available}
+              value={parakeetPresetValue}
+              onChange={(event) => setParakeetModel(event.currentTarget.value)}
+            >
+              <option value="nvidia/parakeet-ctc-0.6b">nvidia/parakeet-ctc-0.6b</option>
+              <option value="nvidia/parakeet-ctc-1.1b">nvidia/parakeet-ctc-1.1b</option>
+              <option value="nvidia/parakeet-tdt-0.6b-v3">
+                nvidia/parakeet-tdt-0.6b-v3 (requires NeMo worker)
+              </option>
+            </select>
+          </label>
+          <label className="field">
+            <span>parakeet compute type</span>
+            <select
+              disabled={!available}
+              value={parakeetComputeType}
+              onChange={(event) =>
+                setParakeetComputeType(event.currentTarget.value as "auto" | "float16" | "float32")
+              }
+            >
+              <option value="auto">Auto</option>
+              <option value="float16">float16</option>
+              <option value="float32">float32</option>
+            </select>
+          </label>
+          {parakeetPresetValue === "nvidia/parakeet-tdt-0.6b-v3" ? (
+            <p className="muted">
+              This TDT model requires a NeMo-based worker and is not supported by the current
+              Transformers parakeet worker.
+            </p>
+          ) : null}
         </>
       ) : null}
       <label className="field inline">

@@ -61,6 +61,10 @@ function defaultFasterWhisperModel(): string {
   return "distil-large-v3";
 }
 
+function defaultParakeetModel(): string {
+  return "nvidia/parakeet-ctc-0.6b";
+}
+
 export function useAppController() {
   const [available, setAvailable] = useState(false);
   const [state, setState] = useState<DictationState>(FALLBACK_STATE);
@@ -89,6 +93,11 @@ export function useAppController() {
     );
   const [fasterWhisperBeamSize, setFasterWhisperBeamSize] =
     useState<number>(DEFAULT_SETTINGS.fasterWhisperBeamSize);
+  const [parakeetModel, setParakeetModel] =
+    useState<string>(DEFAULT_SETTINGS.parakeetModel ?? "");
+  const [parakeetComputeType, setParakeetComputeType] = useState<"auto" | "float16" | "float32">(
+    DEFAULT_SETTINGS.parakeetComputeType,
+  );
   const [vadDisabled, setVadDisabled] = useState<boolean>(DEFAULT_SETTINGS.vadDisabled);
   const [vadRmsThresholdMilli, setVadRmsThresholdMilli] =
     useState<number>(DEFAULT_SETTINGS.vadRmsThresholdMilli);
@@ -191,6 +200,8 @@ export function useAppController() {
           setFasterWhisperModel(settings.faster_whisper_model ?? "");
           setFasterWhisperComputeType(settings.faster_whisper_compute_type);
           setFasterWhisperBeamSize(Math.max(1, Math.min(8, settings.faster_whisper_beam_size)));
+          setParakeetModel(settings.parakeet_model ?? "");
+          setParakeetComputeType(settings.parakeet_compute_type);
           setVadDisabled(settings.vad_disabled);
           setVadRmsThresholdMilli(
             Math.max(1, Math.min(80, settings.vad_rms_threshold_milli ?? 9)),
@@ -287,6 +298,9 @@ export function useAppController() {
       const selectedFasterWhisperModel = fasterWhisperModel.trim()
         ? fasterWhisperModel.trim()
         : defaultFasterWhisperModel();
+      const selectedParakeetModel = parakeetModel.trim()
+        ? parakeetModel.trim()
+        : defaultParakeetModel();
 
       const updated = await updatePhase2Settings({
         hotkey,
@@ -308,6 +322,8 @@ export function useAppController() {
         faster_whisper_model: selectedFasterWhisperModel,
         faster_whisper_compute_type: fasterWhisperComputeType,
         faster_whisper_beam_size: Math.max(1, Math.min(8, Math.round(fasterWhisperBeamSize))),
+        parakeet_model: selectedParakeetModel,
+        parakeet_compute_type: parakeetComputeType,
         vad_disabled: vadDisabled,
         vad_rms_threshold_milli: Math.max(1, Math.min(80, Math.round(vadRmsThresholdMilli))),
         clipboard_fallback: clipboardFallback,
@@ -329,6 +345,8 @@ export function useAppController() {
       setFasterWhisperModel(updated.faster_whisper_model ?? "");
       setFasterWhisperComputeType(updated.faster_whisper_compute_type);
       setFasterWhisperBeamSize(Math.max(1, Math.min(8, updated.faster_whisper_beam_size)));
+      setParakeetModel(updated.parakeet_model ?? "");
+      setParakeetComputeType(updated.parakeet_compute_type);
       setVadDisabled(updated.vad_disabled);
       setVadRmsThresholdMilli(Math.max(1, Math.min(80, updated.vad_rms_threshold_milli ?? 9)));
       setLaunchAtStartup(updated.launch_at_startup);
@@ -369,6 +387,8 @@ export function useAppController() {
       setFasterWhisperBeamSize(
         Math.max(1, Math.min(8, updatedSettings.faster_whisper_beam_size)),
       );
+      setParakeetModel(updatedSettings.parakeet_model ?? "");
+      setParakeetComputeType(updatedSettings.parakeet_compute_type);
       setVadDisabled(updatedSettings.vad_disabled);
       setVadRmsThresholdMilli(
         Math.max(1, Math.min(80, updatedSettings.vad_rms_threshold_milli ?? 9)),
@@ -453,6 +473,8 @@ export function useAppController() {
     fasterWhisperModel,
     fasterWhisperComputeType,
     fasterWhisperBeamSize,
+    parakeetModel,
+    parakeetComputeType,
     vadDisabled,
     vadRmsThresholdMilli,
     availableMicrophones,
@@ -479,6 +501,8 @@ export function useAppController() {
     setFasterWhisperModel,
     setFasterWhisperComputeType,
     setFasterWhisperBeamSize,
+    setParakeetModel,
+    setParakeetComputeType,
     setVadDisabled,
     setVadRmsThresholdMilli,
     setClipboardFallback,

@@ -56,6 +56,7 @@ describe("settings", () => {
 
   it("preserves selected engine when provided", () => {
     expect(normalizeSettings({ sttEngine: "faster_whisper" }).sttEngine).toBe("faster_whisper");
+    expect(normalizeSettings({ sttEngine: "parakeet" }).sttEngine).toBe("parakeet");
   });
 
   it("normalizes faster-whisper settings", () => {
@@ -68,5 +69,15 @@ describe("settings", () => {
     expect(normalized.fasterWhisperModel).toBe("small.en");
     expect(normalized.fasterWhisperBeamSize).toBe(8);
     expect(normalized.fasterWhisperComputeType).toBe("float16");
+  });
+
+  it("normalizes parakeet settings", () => {
+    const normalized = normalizeSettings({
+      parakeetModel: "  nvidia/parakeet-ctc-0.6b ",
+      parakeetComputeType: "float16",
+    });
+
+    expect(normalized.parakeetModel).toBe("nvidia/parakeet-ctc-0.6b");
+    expect(normalized.parakeetComputeType).toBe("float16");
   });
 });

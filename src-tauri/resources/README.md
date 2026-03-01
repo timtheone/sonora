@@ -20,19 +20,33 @@ Build faster-whisper worker executable for packaging:
 pnpm sidecar:setup:faster-whisper
 ```
 
+Build parakeet worker executable for packaging:
+
+```bash
+pnpm sidecar:setup:parakeet
+```
+
 Prefetch model cache for offline faster-whisper usage:
 
 ```bash
 pnpm model:download -- --engine faster_whisper
 pnpm model:download -- --engine faster_whisper --faster-models small.en,distil-large-v3,large-v3
+pnpm model:download -- --engine parakeet
+pnpm model:download -- --engine parakeet --parakeet-models nvidia/parakeet-ctc-0.6b,nvidia/parakeet-ctc-1.1b
+pnpm model:download -- --engine parakeet --parakeet-models nvidia/parakeet-tdt-0.6b-v3
 ```
 
 - Windows: `whisper-cli.exe`
 - macOS/Linux: `whisper-cli`
 - Windows: `faster-whisper-worker.exe`
 - macOS/Linux: `faster-whisper-worker`
+- Windows: `parakeet-worker.exe`
+- macOS/Linux: `parakeet-worker`
 
 This directory is used by runtime binary discovery and can be bundled in installers.
 `whisper-sidecar.json` is generated here to hint runtime backend selection.
 `faster-whisper-sidecar.json` is generated here when faster-whisper worker build succeeds.
+`parakeet-sidecar.json` is generated here when parakeet worker build succeeds.
 Model cache is stored under `models/faster-whisper-cache/` when prefetched.
+Model cache is stored under `models/parakeet-cache/` when prefetched.
+TDT/RNNT parakeet variants (for example `parakeet-tdt-0.6b-v3`) are not supported by the current Transformers-based worker.

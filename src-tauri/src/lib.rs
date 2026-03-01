@@ -54,7 +54,8 @@ use tauri::Emitter;
 use tauri::Manager;
 #[cfg(feature = "desktop")]
 use transcriber::{
-    build_runtime_engine, default_faster_whisper_model, EngineSpec, RuntimeTranscriber,
+    build_runtime_engine, default_faster_whisper_model, default_parakeet_model, EngineSpec,
+    RuntimeTranscriber,
 };
 #[cfg(feature = "desktop")]
 use vad::VadConfig;
@@ -370,6 +371,13 @@ fn resolve_engine_model_path(settings: &AppSettings, resource_dir: Option<&Path>
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(default_faster_whisper_model(settings.model_profile))),
+        SttEngine::Parakeet => settings
+            .parakeet_model
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(default_parakeet_model(settings.model_profile))),
     }
 }
 
@@ -398,6 +406,7 @@ fn build_transcriber_status(app: &tauri::AppHandle, settings: &AppSettings) -> T
         whisper_backend_preference: settings.whisper_backend_preference,
         faster_whisper_compute_type: settings.faster_whisper_compute_type,
         faster_whisper_beam_size: settings.faster_whisper_beam_size,
+        parakeet_compute_type: settings.parakeet_compute_type,
         resource_dir,
     });
 
@@ -430,6 +439,7 @@ fn apply_runtime_transcriber_from_settings(
         whisper_backend_preference: settings.whisper_backend_preference,
         faster_whisper_compute_type: settings.faster_whisper_compute_type,
         faster_whisper_beam_size: settings.faster_whisper_beam_size,
+        parakeet_compute_type: settings.parakeet_compute_type,
         resource_dir,
     });
 

@@ -1,6 +1,6 @@
 use crate::config::{
-    AppSettings, DictationMode, FasterWhisperComputeType, ModelProfile, SttEngine,
-    WhisperBackendPreference,
+    AppSettings, DictationMode, FasterWhisperComputeType, ModelProfile, ParakeetComputeType,
+    SttEngine, WhisperBackendPreference,
 };
 use crate::profile::{clamp_chunk_duration_ms, clamp_partial_cadence_ms};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,8 @@ pub struct AppSettingsPatch {
     pub faster_whisper_model: Option<Option<String>>,
     pub faster_whisper_compute_type: Option<FasterWhisperComputeType>,
     pub faster_whisper_beam_size: Option<u8>,
+    pub parakeet_model: Option<Option<String>>,
+    pub parakeet_compute_type: Option<ParakeetComputeType>,
     pub vad_disabled: Option<bool>,
     pub vad_rms_threshold_milli: Option<u16>,
     pub clipboard_fallback: Option<bool>,
@@ -87,6 +89,12 @@ pub fn apply_patch(settings: &AppSettings, patch: AppSettingsPatch) -> AppSettin
         faster_whisper_beam_size: patch
             .faster_whisper_beam_size
             .unwrap_or(settings.faster_whisper_beam_size),
+        parakeet_model: patch
+            .parakeet_model
+            .unwrap_or_else(|| settings.parakeet_model.clone()),
+        parakeet_compute_type: patch
+            .parakeet_compute_type
+            .unwrap_or(settings.parakeet_compute_type),
         vad_disabled: patch.vad_disabled.unwrap_or(settings.vad_disabled),
         vad_rms_threshold_milli: patch
             .vad_rms_threshold_milli
@@ -110,6 +118,11 @@ fn normalize_settings(mut settings: AppSettings) -> AppSettings {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     settings.faster_whisper_beam_size = settings.faster_whisper_beam_size.clamp(1, 8);
+    settings.parakeet_model = settings
+        .parakeet_model
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     settings.vad_rms_threshold_milli = settings
         .vad_rms_threshold_milli
         .map(|value| value.clamp(1, 80));
@@ -152,6 +165,8 @@ mod tests {
                 faster_whisper_model: Some(Some("small.en".to_string())),
                 faster_whisper_compute_type: Some(FasterWhisperComputeType::Float16),
                 faster_whisper_beam_size: Some(2),
+                parakeet_model: Some(Some("nvidia/parakeet-ctc-0.6b".to_string())),
+                parakeet_compute_type: Some(ParakeetComputeType::Float16),
                 vad_disabled: Some(true),
                 vad_rms_threshold_milli: Some(6),
                 clipboard_fallback: Some(false),
@@ -179,6 +194,11 @@ mod tests {
             FasterWhisperComputeType::Float16
         );
         assert_eq!(updated.faster_whisper_beam_size, 2);
+        assert_eq!(
+            updated.parakeet_model.as_deref(),
+            Some("nvidia/parakeet-ctc-0.6b")
+        );
+        assert_eq!(updated.parakeet_compute_type, ParakeetComputeType::Float16);
         assert!(updated.vad_disabled);
         assert_eq!(updated.vad_rms_threshold_milli, Some(6));
         assert!(!updated.clipboard_fallback);
@@ -250,6 +270,8 @@ mod tests {
             faster_whisper_model: Some("small.en".to_string()),
             faster_whisper_compute_type: FasterWhisperComputeType::Int8,
             faster_whisper_beam_size: 3,
+            parakeet_model: Some("nvidia/parakeet-ctc-0.6b".to_string()),
+            parakeet_compute_type: ParakeetComputeType::Auto,
             vad_disabled: false,
             vad_rms_threshold_milli: Some(9),
             clipboard_fallback: true,
@@ -279,6 +301,7 @@ mod tests {
         settings.partial_cadence_ms = Some(9_000);
         settings.faster_whisper_model = Some("   ".to_string());
         settings.faster_whisper_beam_size = 90;
+        settings.parakeet_model = Some("   ".to_string());
         settings.vad_rms_threshold_milli = Some(999);
 
         save(&path, &settings).expect("settings should be saved");
@@ -288,6 +311,7 @@ mod tests {
         assert_eq!(loaded.partial_cadence_ms, Some(2_500));
         assert!(loaded.faster_whisper_model.is_none());
         assert_eq!(loaded.faster_whisper_beam_size, 8);
+        assert!(loaded.parakeet_model.is_none());
         assert_eq!(loaded.vad_rms_threshold_milli, Some(80));
 
         let _ = fs::remove_file(path);

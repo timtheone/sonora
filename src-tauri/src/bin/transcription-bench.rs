@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use sonora_dictation_lib::audio;
 use sonora_dictation_lib::config::{
-    DictationMode, FasterWhisperComputeType, ModelProfile, SttEngine, WhisperBackendPreference,
+    DictationMode, FasterWhisperComputeType, ModelProfile, ParakeetComputeType, SttEngine,
+    WhisperBackendPreference,
 };
 use sonora_dictation_lib::pipeline::DictationPipeline;
 use sonora_dictation_lib::postprocess::{merge_transcript_segments, normalize_transcript};
@@ -49,6 +50,7 @@ struct BenchCase {
     engine: SttEngine,
     model_reference: &'static str,
     compute_type: FasterWhisperComputeType,
+    parakeet_compute_type: ParakeetComputeType,
     beam_size: u8,
 }
 
@@ -711,6 +713,7 @@ fn build_case_spec(case: &BenchCase, options: &RunOptions) -> Result<EngineSpec,
         whisper_backend_preference: options.backend,
         faster_whisper_compute_type: case.compute_type,
         faster_whisper_beam_size: case.beam_size,
+        parakeet_compute_type: case.parakeet_compute_type,
         resource_dir: Some(options.resource_dir.clone()),
     })
 }
@@ -719,6 +722,7 @@ fn resolve_case_model_path(case: &BenchCase, resource_dir: &Path) -> PathBuf {
     match case.engine {
         SttEngine::WhisperCpp => resource_dir.join(case.model_reference),
         SttEngine::FasterWhisper => PathBuf::from(case.model_reference),
+        SttEngine::Parakeet => PathBuf::from(case.model_reference),
     }
 }
 
@@ -729,6 +733,7 @@ fn resolve_case(name: &str) -> Result<BenchCase, String> {
             engine: SttEngine::WhisperCpp,
             model_reference: "models/ggml-large-v3-turbo-q8_0.bin",
             compute_type: FasterWhisperComputeType::Auto,
+            parakeet_compute_type: ParakeetComputeType::Auto,
             beam_size: 1,
         }),
         "whisper-base-en-q8" => Ok(BenchCase {
@@ -736,6 +741,7 @@ fn resolve_case(name: &str) -> Result<BenchCase, String> {
             engine: SttEngine::WhisperCpp,
             model_reference: "models/ggml-base.en-q8_0.bin",
             compute_type: FasterWhisperComputeType::Auto,
+            parakeet_compute_type: ParakeetComputeType::Auto,
             beam_size: 1,
         }),
         "faster-large-v3" => Ok(BenchCase {
@@ -743,6 +749,7 @@ fn resolve_case(name: &str) -> Result<BenchCase, String> {
             engine: SttEngine::FasterWhisper,
             model_reference: "large-v3",
             compute_type: FasterWhisperComputeType::Float16,
+            parakeet_compute_type: ParakeetComputeType::Auto,
             beam_size: 5,
         }),
         "faster-distil-large-v3" => Ok(BenchCase {
@@ -750,6 +757,7 @@ fn resolve_case(name: &str) -> Result<BenchCase, String> {
             engine: SttEngine::FasterWhisper,
             model_reference: "distil-large-v3",
             compute_type: FasterWhisperComputeType::Float16,
+            parakeet_compute_type: ParakeetComputeType::Auto,
             beam_size: 5,
         }),
         "faster-small-en" => Ok(BenchCase {
@@ -757,19 +765,46 @@ fn resolve_case(name: &str) -> Result<BenchCase, String> {
             engine: SttEngine::FasterWhisper,
             model_reference: "small.en",
             compute_type: FasterWhisperComputeType::Float16,
+            parakeet_compute_type: ParakeetComputeType::Auto,
             beam_size: 3,
+        }),
+        "parakeet-ctc-0.6b" => Ok(BenchCase {
+            name: "parakeet-ctc-0.6b",
+            engine: SttEngine::Parakeet,
+            model_reference: "nvidia/parakeet-ctc-0.6b",
+            compute_type: FasterWhisperComputeType::Auto,
+            parakeet_compute_type: ParakeetComputeType::Auto,
+            beam_size: 1,
+        }),
+        "parakeet-ctc-1.1b" => Ok(BenchCase {
+            name: "parakeet-ctc-1.1b",
+            engine: SttEngine::Parakeet,
+            model_reference: "nvidia/parakeet-ctc-1.1b",
+            compute_type: FasterWhisperComputeType::Auto,
+            parakeet_compute_type: ParakeetComputeType::Auto,
+            beam_size: 1,
+        }),
+        "parakeet-tdt-0.6b-v3" => Ok(BenchCase {
+            name: "parakeet-tdt-0.6b-v3",
+            engine: SttEngine::Parakeet,
+            model_reference: "nvidia/parakeet-tdt-0.6b-v3",
+            compute_type: FasterWhisperComputeType::Auto,
+            parakeet_compute_type: ParakeetComputeType::Auto,
+            beam_size: 1,
         }),
         other => Err(format!("unknown --case '{other}'")),
     }
 }
 
-fn default_case_names() -> [&'static str; 5] {
+fn default_case_names() -> [&'static str; 7] {
     [
         "whisper-large-v3-turbo-q8",
         "whisper-base-en-q8",
         "faster-large-v3",
         "faster-distil-large-v3",
         "faster-small-en",
+        "parakeet-ctc-0.6b",
+        "parakeet-ctc-1.1b",
     ]
 }
 
@@ -777,6 +812,7 @@ fn case_engine_label(engine: SttEngine) -> &'static str {
     match engine {
         SttEngine::WhisperCpp => "whisper_cpp",
         SttEngine::FasterWhisper => "faster_whisper",
+        SttEngine::Parakeet => "parakeet",
     }
 }
 
@@ -1112,6 +1148,10 @@ fn usage() -> String {
         "  faster-large-v3",
         "  faster-distil-large-v3",
         "  faster-small-en",
+        "  parakeet-ctc-0.6b",
+        "  parakeet-ctc-1.1b",
+        "  parakeet-tdt-0.6b-v3",
+        "    (tdt case is listed for comparison planning; current Transformers worker reports NeMo requirement)",
     ]
     .join("\n")
 }

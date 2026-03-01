@@ -1,9 +1,10 @@
 import type { DictationMode } from "./dictation-machine";
 
 export type ModelProfile = "balanced" | "fast";
-export type SttEngine = "whisper_cpp" | "faster_whisper";
+export type SttEngine = "whisper_cpp" | "faster_whisper" | "parakeet";
 export type WhisperBackendPreference = "auto" | "cpu" | "cuda";
 export type FasterWhisperComputeType = "auto" | "int8" | "float16" | "float32";
+export type ParakeetComputeType = "auto" | "float16" | "float32";
 
 export const CHUNK_DURATION_MIN_MS = 500;
 export const CHUNK_DURATION_MAX_MS = 4000;
@@ -53,6 +54,8 @@ export interface AppSettings {
   fasterWhisperModel: string | null;
   fasterWhisperComputeType: FasterWhisperComputeType;
   fasterWhisperBeamSize: number;
+  parakeetModel: string | null;
+  parakeetComputeType: ParakeetComputeType;
   vadDisabled: boolean;
   vadRmsThresholdMilli: number;
   clipboardFallback: boolean;
@@ -74,6 +77,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fasterWhisperModel: null,
   fasterWhisperComputeType: "auto",
   fasterWhisperBeamSize: 1,
+  parakeetModel: null,
+  parakeetComputeType: "auto",
   vadDisabled: false,
   vadRmsThresholdMilli: 9,
   clipboardFallback: true,
@@ -112,6 +117,10 @@ export function normalizeSettings(input: Partial<AppSettings> = {}): AppSettings
       input.fasterWhisperBeamSize === undefined
         ? DEFAULT_SETTINGS.fasterWhisperBeamSize
         : Math.max(1, Math.min(8, Math.round(input.fasterWhisperBeamSize))),
+    parakeetModel: input.parakeetModel?.trim()
+      ? input.parakeetModel.trim()
+      : DEFAULT_SETTINGS.parakeetModel,
+    parakeetComputeType: input.parakeetComputeType ?? DEFAULT_SETTINGS.parakeetComputeType,
     vadDisabled: input.vadDisabled ?? DEFAULT_SETTINGS.vadDisabled,
     vadRmsThresholdMilli:
       input.vadRmsThresholdMilli === undefined

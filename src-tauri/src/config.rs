@@ -19,6 +19,7 @@ pub enum ModelProfile {
 pub enum SttEngine {
     WhisperCpp,
     FasterWhisper,
+    Parakeet,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,6 +35,14 @@ pub enum WhisperBackendPreference {
 pub enum FasterWhisperComputeType {
     Auto,
     Int8,
+    Float16,
+    Float32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParakeetComputeType {
+    Auto,
     Float16,
     Float32,
 }
@@ -63,6 +72,10 @@ pub struct AppSettings {
     #[serde(default = "default_faster_whisper_beam_size")]
     pub faster_whisper_beam_size: u8,
     #[serde(default)]
+    pub parakeet_model: Option<String>,
+    #[serde(default = "default_parakeet_compute_type")]
+    pub parakeet_compute_type: ParakeetComputeType,
+    #[serde(default)]
     pub vad_disabled: bool,
     #[serde(default)]
     pub vad_rms_threshold_milli: Option<u16>,
@@ -90,6 +103,10 @@ fn default_faster_whisper_beam_size() -> u8 {
     1
 }
 
+fn default_parakeet_compute_type() -> ParakeetComputeType {
+    ParakeetComputeType::Auto
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -107,6 +124,8 @@ impl Default for AppSettings {
             faster_whisper_model: None,
             faster_whisper_compute_type: default_faster_whisper_compute_type(),
             faster_whisper_beam_size: default_faster_whisper_beam_size(),
+            parakeet_model: None,
+            parakeet_compute_type: default_parakeet_compute_type(),
             vad_disabled: false,
             vad_rms_threshold_milli: None,
             clipboard_fallback: true,
@@ -144,6 +163,8 @@ mod tests {
             FasterWhisperComputeType::Auto
         );
         assert_eq!(settings.faster_whisper_beam_size, 1);
+        assert!(settings.parakeet_model.is_none());
+        assert_eq!(settings.parakeet_compute_type, ParakeetComputeType::Auto);
         assert!(!settings.vad_disabled);
         assert!(settings.vad_rms_threshold_milli.is_none());
     }
@@ -177,6 +198,8 @@ mod tests {
             FasterWhisperComputeType::Auto
         );
         assert_eq!(parsed.faster_whisper_beam_size, 1);
+        assert!(parsed.parakeet_model.is_none());
+        assert_eq!(parsed.parakeet_compute_type, ParakeetComputeType::Auto);
         assert!(!parsed.vad_disabled);
         assert!(parsed.vad_rms_threshold_milli.is_none());
     }

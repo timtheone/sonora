@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { DictationMode } from "./phase1";
 
 export type WhisperBackendPreference = "auto" | "cpu" | "cuda";
-export type SttEngine = "whisper_cpp" | "faster_whisper";
+export type SttEngine = "whisper_cpp" | "faster_whisper" | "parakeet";
 export type FasterWhisperComputeType = "auto" | "int8" | "float16" | "float32";
+export type ParakeetComputeType = "auto" | "float16" | "float32";
 
 export interface AppSettings {
   hotkey: string;
@@ -20,6 +21,8 @@ export interface AppSettings {
   faster_whisper_model: string | null;
   faster_whisper_compute_type: FasterWhisperComputeType;
   faster_whisper_beam_size: number;
+  parakeet_model: string | null;
+  parakeet_compute_type: ParakeetComputeType;
   vad_disabled: boolean;
   vad_rms_threshold_milli: number | null;
   clipboard_fallback: boolean;
@@ -40,6 +43,8 @@ export interface AppSettingsPatch {
   faster_whisper_model?: string | null;
   faster_whisper_compute_type?: FasterWhisperComputeType;
   faster_whisper_beam_size?: number;
+  parakeet_model?: string | null;
+  parakeet_compute_type?: ParakeetComputeType;
   vad_disabled?: boolean;
   vad_rms_threshold_milli?: number;
   clipboard_fallback?: boolean;

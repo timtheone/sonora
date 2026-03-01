@@ -40,18 +40,27 @@ const WHISPER_PROFILES = {
 };
 
 const FASTER_DEFAULT_MODELS = ["small.en", "distil-large-v3", "large-v3"];
-const ENGINE_VALUES = ["whisper_cpp", "faster_whisper", "all"];
+const PARAKEET_DEFAULT_MODELS = ["nvidia/parakeet-ctc-0.6b", "nvidia/parakeet-ctc-1.1b"];
+const ENGINE_VALUES = ["whisper_cpp", "faster_whisper", "parakeet", "all"];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const modelsDir = path.join(projectRoot, "src-tauri", "resources", "models");
 const fasterCacheDir = path.join(modelsDir, "faster-whisper-cache");
+const parakeetCacheDir = path.join(modelsDir, "parakeet-cache");
 const fasterWorkerPath = path.join(
   projectRoot,
   "src-tauri",
   "resources",
   "bin",
   process.platform === "win32" ? "faster-whisper-worker.exe" : "faster-whisper-worker",
+);
+const parakeetWorkerPath = path.join(
+  projectRoot,
+  "src-tauri",
+  "resources",
+  "bin",
+  process.platform === "win32" ? "parakeet-worker.exe" : "parakeet-worker",
 );
 
 function parseArgs(argv) {
@@ -63,8 +72,10 @@ function parseArgs(argv) {
       engine: "whisper_cpp",
       force: false,
       fasterModels: FASTER_DEFAULT_MODELS,
+      parakeetModels: PARAKEET_DEFAULT_MODELS,
       device: "auto",
       computeType: "auto",
+      parakeetComputeType: "auto",
     };
   }
 
@@ -74,8 +85,10 @@ function parseArgs(argv) {
     engine: "whisper_cpp",
     force: false,
     fasterModels: FASTER_DEFAULT_MODELS,
+    parakeetModels: PARAKEET_DEFAULT_MODELS,
     device: "auto",
     computeType: "auto",
+    parakeetComputeType: "auto",
   };
 
   let sawSelection = false;
@@ -129,6 +142,32 @@ function parseArgs(argv) {
       options.computeType = value.slice("--compute-type=".length);
       continue;
     }
+    if (value === "--parakeet-models") {
+      const raw = values[i + 1] ?? "";
+      options.parakeetModels = raw
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      i += 1;
+      continue;
+    }
+    if (value.startsWith("--parakeet-models=")) {
+      options.parakeetModels = value
+        .slice("--parakeet-models=".length)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      continue;
+    }
+    if (value === "--parakeet-compute-type") {
+      options.parakeetComputeType = values[i + 1] ?? options.parakeetComputeType;
+      i += 1;
+      continue;
+    }
+    if (value.startsWith("--parakeet-compute-type=")) {
+      options.parakeetComputeType = value.slice("--parakeet-compute-type=".length);
+      continue;
+    }
     if (!value.startsWith("--") && !sawSelection) {
       options.whisperSelection = value;
       sawSelection = true;
@@ -152,6 +191,9 @@ function parseArgs(argv) {
   if (options.fasterModels.length === 0) {
     options.fasterModels = FASTER_DEFAULT_MODELS;
   }
+  if (options.parakeetModels.length === 0) {
+    options.parakeetModels = PARAKEET_DEFAULT_MODELS;
+  }
 
   return options;
 }
@@ -159,17 +201,19 @@ function parseArgs(argv) {
 function printHelp() {
   process.stdout.write(
     [
-      "Download model bundles for whisper.cpp and/or faster-whisper.",
+      "Download model bundles for whisper.cpp, faster-whisper, and/or parakeet.",
       "",
       "Usage:",
-      "  pnpm model:download [default|all|balanced|fast|q8|quality] [--engine whisper_cpp|faster_whisper|all] [--force]",
+      "  pnpm model:download [default|all|balanced|fast|q8|quality] [--engine whisper_cpp|faster_whisper|parakeet|all] [--force]",
       "",
       "Options:",
       "  --engine          Engine(s) to sync (default: whisper_cpp)",
       "  --force           Re-download whisper.cpp files even if present",
       "  --faster-models   Comma-separated faster-whisper model ids/paths",
-      "  --device          faster-whisper device: auto|cpu|cuda",
+      "  --parakeet-models Comma-separated parakeet model ids/paths",
+      "  --device          worker device: auto|cpu|cuda",
       "  --compute-type    faster-whisper compute: auto|int8|float16|float32",
+      "  --parakeet-compute-type   parakeet compute: auto|float16|float32",
       "",
       "Whisper profiles:",
       "  default -> balanced + fast",
@@ -181,12 +225,17 @@ function printHelp() {
       "faster-whisper defaults:",
       `  ${FASTER_DEFAULT_MODELS.join(" ")}`,
       "",
+      "parakeet defaults:",
+      `  ${PARAKEET_DEFAULT_MODELS.join(" ")}`,
+      "  optional: nvidia/parakeet-tdt-0.6b-v3 (not supported by current Transformers worker)",
+      "",
       "Examples:",
       "  pnpm model:download",
       "  pnpm model:download default",
       "  pnpm model:download q8",
       "  pnpm model:download all --engine whisper_cpp",
       "  pnpm model:download -- --engine faster_whisper",
+      "  pnpm model:download -- --engine parakeet",
       "  pnpm model:download -- all --engine all",
       "  pnpm model:download balanced",
       "  pnpm model:download fast --force",
@@ -262,6 +311,14 @@ async function main() {
       options.computeType,
     );
   }
+
+  if (options.engine === "parakeet" || options.engine === "all") {
+    await prefetchParakeetModels(
+      options.parakeetModels,
+      options.device,
+      options.parakeetComputeType,
+    );
+  }
 }
 
 function hasNvidiaGpu() {
@@ -289,6 +346,20 @@ function resolveComputeType(computeType, device) {
     return normalized;
   }
   throw new Error("Invalid --compute-type value. Use auto, int8, float16, or float32.");
+}
+
+function resolveParakeetComputeType(computeType, device) {
+  const normalized = computeType.trim().toLowerCase();
+  if (normalized === "auto") {
+    return device === "cuda" ? "float16" : "float32";
+  }
+  if (normalized === "float16") {
+    return device === "cuda" ? "float16" : "float32";
+  }
+  if (normalized === "float32") {
+    return normalized;
+  }
+  throw new Error("Invalid --parakeet-compute-type value. Use auto, float16, or float32.");
 }
 
 function sendJsonLine(stdin, payload) {
@@ -379,6 +450,96 @@ async function prefetchFasterWhisperModels(models, deviceArg, computeTypeArg) {
   child.stdin.end();
   child.kill();
   process.stdout.write(`Model cache ready: ${fasterCacheDir}\n`);
+}
+
+async function prefetchParakeetModels(models, deviceArg, computeTypeArg) {
+  try {
+    await fs.access(parakeetWorkerPath);
+  } catch {
+    throw new Error(
+      `parakeet worker not found at ${parakeetWorkerPath}. Run: pnpm sidecar:setup:parakeet`,
+    );
+  }
+
+  await ensureDir(parakeetCacheDir);
+  const device = resolveDevice(deviceArg);
+  const computeType = resolveParakeetComputeType(computeTypeArg, device);
+  process.stdout.write(
+    `Prefetching parakeet models [${models.join(", ")}] with device=${device}, compute_type=${computeType}\n`,
+  );
+
+  const child = spawn(parakeetWorkerPath, ["--stdio"], {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: {
+      ...process.env,
+      SONORA_PARAKEET_MODEL_CACHE: parakeetCacheDir,
+    },
+  });
+
+  if (!child.stdin || !child.stdout) {
+    throw new Error("Failed to initialize parakeet worker stdio streams.");
+  }
+
+  child.stdout.setEncoding("utf8");
+  let buffer = "";
+  const responses = [];
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        responses.push(JSON.parse(line));
+      } catch {
+        // ignore malformed worker lines
+      }
+    }
+  });
+
+  for (const model of models) {
+    if (isParakeetModelUnsupportedByTransformersWorker(model)) {
+      throw new Error(
+        `Model '${model}' requires a NeMo-based worker and is not supported by the current Transformers parakeet worker.`,
+      );
+    }
+
+    const requestId = `prefetch-${model}`;
+    await sendJsonLine(child.stdin, {
+      op: "preload",
+      id: requestId,
+      model,
+      device,
+      compute_type: computeType,
+      language: "en",
+    });
+
+    const startedAt = Date.now();
+    let matched = null;
+    while (!matched) {
+      if (Date.now() - startedAt > 300_000) {
+        throw new Error(`Timed out while prefetching '${model}'.`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      matched = responses.find((entry) => entry.id === requestId);
+    }
+
+    if (!matched.ok) {
+      throw new Error(`Failed to prefetch '${model}': ${matched.error ?? "unknown error"}`);
+    }
+    process.stdout.write(`Prefetched ${model} (${matched.load_ms} ms)\n`);
+  }
+
+  child.stdin.end();
+  child.kill();
+  process.stdout.write(`Model cache ready: ${parakeetCacheDir}\n`);
+}
+
+function isParakeetModelUnsupportedByTransformersWorker(model) {
+  const normalized = String(model ?? "").trim().toLowerCase();
+  return normalized.startsWith("nvidia/parakeet-tdt-") || normalized.startsWith("nvidia/parakeet-rnnt-");
 }
 
 main().catch((error) => {
