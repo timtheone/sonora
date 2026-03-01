@@ -181,6 +181,8 @@ struct TranscriptPayload {
     chunk_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     emitted_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<u64>,
 }
 
 #[cfg(feature = "desktop")]
@@ -193,6 +195,7 @@ struct TranscriptCorrelation {
 #[cfg(feature = "desktop")]
 #[derive(Clone)]
 struct PendingUtterance {
+    session_id: u64,
     text: String,
     last_speech_unix_ms: u64,
 }
@@ -686,24 +689,31 @@ fn upsert_pending_utterance(
     pending: &mut Option<PendingUtterance>,
     raw_transcript: Option<String>,
     observed_unix_ms: u64,
-) {
+    next_session_id: &mut u64,
+) -> bool {
     let collapsed = raw_transcript
         .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
         .unwrap_or_default();
     if collapsed.is_empty() {
-        return;
+        return false;
     }
 
     match pending {
         Some(utterance) => {
-            utterance.text = merge_transcript_segments(&utterance.text, &collapsed);
+            let merged = merge_transcript_segments(&utterance.text, &collapsed);
+            let changed = merged != utterance.text;
+            utterance.text = merged;
             utterance.last_speech_unix_ms = observed_unix_ms;
+            changed
         }
         None => {
+            *next_session_id = next_session_id.saturating_add(1);
             *pending = Some(PendingUtterance {
+                session_id: *next_session_id,
                 text: collapsed,
                 last_speech_unix_ms: observed_unix_ms,
             });
+            true
         }
     }
 }
@@ -844,6 +854,7 @@ fn emit_transcript_if_fresh(
     last_transcript: &Arc<Mutex<Option<String>>>,
     raw_transcript: Option<String>,
     correlation: Option<TranscriptCorrelation>,
+    session_id: Option<u64>,
 ) -> Result<Option<String>, String> {
     let mut last = last_transcript
         .lock()
@@ -857,6 +868,7 @@ fn emit_transcript_if_fresh(
                 text: text.clone(),
                 chunk_id: correlation.map(|value| value.chunk_id),
                 emitted_unix_ms: correlation.map(|value| value.emitted_unix_ms),
+                session_id,
             },
         )
         .map_err(|error| error.to_string())?;
@@ -884,6 +896,7 @@ fn run_transcription_worker(
 ) {
     let mut pending_samples = VecDeque::<f32>::new();
     let mut pending_utterance: Option<PendingUtterance> = None;
+    let mut next_transcript_session_id = 0u64;
     let mut last_feed_at = Instant::now() - Duration::from_secs(8);
     let mut pending_started_at: Option<Instant> = None;
     let mut pending_downsample_ms = 0u64;
@@ -898,15 +911,7 @@ fn run_transcription_worker(
                     current_unix_ms_u64(),
                     TRANSCRIPT_SESSION_GAP_MS,
                 ) {
-                    if let Err(error) = emit_transcript_if_fresh(
-                        &app,
-                        &logs_path,
-                        &last_transcript,
-                        take_pending_utterance(&mut pending_utterance),
-                        None,
-                    ) {
-                        let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
-                    }
+                    let _ = take_pending_utterance(&mut pending_utterance);
                 }
                 continue;
             }
@@ -939,15 +944,7 @@ fn run_transcription_worker(
         };
 
         if status.state != pipeline::DictationState::Listening {
-            if let Err(error) = emit_transcript_if_fresh(
-                &app,
-                &logs_path,
-                &last_transcript,
-                take_pending_utterance(&mut pending_utterance),
-                None,
-            ) {
-                let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
-            }
+            let _ = take_pending_utterance(&mut pending_utterance);
             pending_samples.clear();
             continue;
         }
@@ -1001,36 +998,35 @@ fn run_transcription_worker(
         let pipeline_ms = duration_millis_u64(pipeline_started_at.elapsed());
 
         let emitted_unix_ms = current_unix_ms_u64();
-        upsert_pending_utterance(
+        let pending_changed = upsert_pending_utterance(
             &mut pending_utterance,
             metrics.transcript.clone(),
             emitted_unix_ms,
+            &mut next_transcript_session_id,
         );
 
-        let ready_to_emit = !metrics.had_speech
-            && should_flush_pending_utterance(
-                &pending_utterance,
-                emitted_unix_ms,
-                TRANSCRIPT_SESSION_GAP_MS,
-            );
-
         let emit_started_at = Instant::now();
-        let emitted_text = if ready_to_emit {
-            match emit_transcript_if_fresh(
-                &app,
-                &logs_path,
-                &last_transcript,
-                take_pending_utterance(&mut pending_utterance),
-                Some(TranscriptCorrelation {
-                    chunk_id,
-                    emitted_unix_ms,
-                }),
-            ) {
-                Ok(value) => value,
-                Err(error) => {
-                    let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
-                    None
+        let emitted_text = if pending_changed {
+            if let Some(utterance) = pending_utterance.as_ref() {
+                match emit_transcript_if_fresh(
+                    &app,
+                    &logs_path,
+                    &last_transcript,
+                    Some(utterance.text.clone()),
+                    Some(TranscriptCorrelation {
+                        chunk_id,
+                        emitted_unix_ms,
+                    }),
+                    Some(utterance.session_id),
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+                        None
+                    }
                 }
+            } else {
+                None
             }
         } else {
             None
@@ -1069,17 +1065,18 @@ fn run_transcription_worker(
                 transcript_len,
             },
         );
-        pending_downsample_ms = 0;
-    }
 
-    if let Err(error) = emit_transcript_if_fresh(
-        &app,
-        &logs_path,
-        &last_transcript,
-        take_pending_utterance(&mut pending_utterance),
-        None,
-    ) {
-        let _ = log_store::append(&logs_path, "error", "mic.capture", &error);
+        if !metrics.had_speech
+            && should_flush_pending_utterance(
+                &pending_utterance,
+                emitted_unix_ms,
+                TRANSCRIPT_SESSION_GAP_MS,
+            )
+        {
+            let _ = take_pending_utterance(&mut pending_utterance);
+        }
+
+        pending_downsample_ms = 0;
     }
 }
 
@@ -1422,6 +1419,7 @@ fn phase1_feed_audio(
         &store.last_transcript,
         raw_transcript,
         None,
+        None,
     )
 }
 
@@ -1469,16 +1467,22 @@ mod tests {
     #[test]
     fn pending_utterance_merges_continuous_segments() {
         let mut pending = None;
-        upsert_pending_utterance(
+        let mut next_session_id = 0u64;
+        assert!(upsert_pending_utterance(
             &mut pending,
             Some("At 7:45 a.m. I walked".to_string()),
             1_000,
-        );
-        upsert_pending_utterance(
+            &mut next_session_id,
+        ));
+        assert!(upsert_pending_utterance(
             &mut pending,
             Some("three blocks to Maple Street".to_string()),
             1_600,
-        );
+            &mut next_session_id,
+        ));
+
+        let session_id = pending.as_ref().map(|value| value.session_id);
+        assert_eq!(session_id, Some(1));
 
         let text = take_pending_utterance(&mut pending);
         assert_eq!(
@@ -1491,11 +1495,13 @@ mod tests {
     #[test]
     fn pending_utterance_flushes_after_silence_gap() {
         let mut pending = None;
-        upsert_pending_utterance(
+        let mut next_session_id = 0u64;
+        assert!(upsert_pending_utterance(
             &mut pending,
             Some("One large cappuccino".to_string()),
             2_000,
-        );
+            &mut next_session_id,
+        ));
 
         assert!(!should_flush_pending_utterance(
             &pending,
@@ -1512,7 +1518,13 @@ mod tests {
     #[test]
     fn pending_utterance_ignores_empty_updates() {
         let mut pending = None;
-        upsert_pending_utterance(&mut pending, Some("   ".to_string()), 5_000);
+        let mut next_session_id = 0u64;
+        assert!(!upsert_pending_utterance(
+            &mut pending,
+            Some("   ".to_string()),
+            5_000,
+            &mut next_session_id,
+        ));
         assert!(pending.is_none());
     }
 

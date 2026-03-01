@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   CHUNK_DURATION_MAX_MS,
@@ -106,6 +106,7 @@ export function useAppController() {
   const [runtimeLogs, setRuntimeLogs] = useState<string[]>([]);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const activeTranscriptSessionId = useRef<number | null>(null);
 
   const statusLabel = useMemo(() => {
     if (!available) {
@@ -213,7 +214,21 @@ export function useAppController() {
     const unlistenTranscript = listen<TranscriptPayload>(
       "dictation:transcript",
       (event) => {
-        setRecentTranscripts((previous) => [event.payload.text, ...previous].slice(0, 8));
+        const sessionId =
+          typeof event.payload.session_id === "number" ? event.payload.session_id : null;
+
+        setRecentTranscripts((previous) => {
+          if (
+            sessionId !== null &&
+            activeTranscriptSessionId.current === sessionId &&
+            previous.length > 0
+          ) {
+            return [event.payload.text, ...previous.slice(1)].slice(0, 8);
+          }
+
+          activeTranscriptSessionId.current = sessionId;
+          return [event.payload.text, ...previous].slice(0, 8);
+        });
         if (
           typeof event.payload.chunk_id === "number" &&
           typeof event.payload.emitted_unix_ms === "number"
