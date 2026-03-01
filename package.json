@@ -15,6 +15,7 @@
     "sidecar:setup": "node scripts/setup-whisper-sidecar.mjs",
     "sidecar:setup:faster-whisper": "node scripts/setup-faster-whisper-sidecar.mjs",
     "perf:watch": "node scripts/perf-watch.mjs",
+    "benchmark:devices": "cargo run --manifest-path src-tauri/Cargo.toml --bin transcription-bench -- devices",
     "benchmark:record": "cargo run --manifest-path src-tauri/Cargo.toml --bin transcription-bench -- record",
     "benchmark:run": "cargo run --manifest-path src-tauri/Cargo.toml --bin transcription-bench -- run",
     "test": "vitest run",

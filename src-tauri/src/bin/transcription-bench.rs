@@ -164,6 +164,7 @@ fn run_main() -> Result<(), String> {
     };
 
     match command.as_str() {
+        "devices" => list_input_devices(),
         "record" => {
             let options = parse_record_options(&args[1..])?;
             record_sample(options)
@@ -326,22 +327,70 @@ fn record_sample(options: RecordOptions) -> Result<(), String> {
 
     let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<f32>>(64);
     let stream = audio::build_live_input_stream(options.microphone_id.as_deref(), frame_tx)?;
+    if stream.sample_rate_hz < SAMPLE_RATE_HZ as u32 {
+        return Err(format!(
+            "microphone sample rate {} Hz is below required {} Hz",
+            stream.sample_rate_hz, SAMPLE_RATE_HZ
+        ));
+    }
     let gain = (options.sensitivity_percent.clamp(50, 300) as f32 / 100.0).clamp(0.5, 3.0);
 
     eprintln!(
-        "recording benchmark sample for {}s (source={} Hz)...",
-        options.seconds, stream.sample_rate_hz
+        "recording benchmark sample for {}s (mic_id={:?}, source={} Hz, gain={:.2})...",
+        options.seconds, options.microphone_id, stream.sample_rate_hz, gain
     );
 
     let started_at = Instant::now();
+    let mut last_status_at = started_at;
     let mut captured_16k = Vec::<f32>::new();
+    let mut frames_received = 0usize;
+    let mut source_samples_received = 0usize;
+    let mut downsampled_samples_received = 0usize;
+    let mut peak_abs = 0.0_f32;
+    let mut energy_sum = 0.0_f64;
+    let mut energy_count = 0usize;
+
     while started_at.elapsed() < Duration::from_secs(options.seconds) {
         match frame_rx.recv_timeout(Duration::from_millis(80)) {
             Ok(mut frame) => {
+                frames_received = frames_received.saturating_add(1);
+                source_samples_received = source_samples_received.saturating_add(frame.len());
                 apply_gain(&mut frame, gain);
+                for sample in &frame {
+                    let abs = sample.abs();
+                    if abs > peak_abs {
+                        peak_abs = abs;
+                    }
+                    let as_f64 = *sample as f64;
+                    energy_sum += as_f64 * as_f64;
+                    energy_count = energy_count.saturating_add(1);
+                }
                 let downsampled = audio::downsample_to_16k(&frame, stream.sample_rate_hz);
                 if !downsampled.is_empty() {
+                    downsampled_samples_received =
+                        downsampled_samples_received.saturating_add(downsampled.len());
                     captured_16k.extend(downsampled);
+                }
+
+                if last_status_at.elapsed() >= Duration::from_secs(1) {
+                    let rms = if energy_count == 0 {
+                        0.0
+                    } else {
+                        (energy_sum / energy_count as f64).sqrt() as f32
+                    };
+                    let captured_ms =
+                        (captured_16k.len() as u64 * 1000).saturating_div(SAMPLE_RATE_HZ as u64);
+                    eprintln!(
+                        "  t={}s frames={} src_samples={} ds_samples={} rms={:.4} peak={:.4} captured={}ms",
+                        started_at.elapsed().as_secs(),
+                        frames_received,
+                        source_samples_received,
+                        downsampled_samples_received,
+                        rms,
+                        peak_abs,
+                        captured_ms,
+                    );
+                    last_status_at = Instant::now();
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -352,14 +401,57 @@ fn record_sample(options: RecordOptions) -> Result<(), String> {
     }
     drop(stream);
 
+    if frames_received == 0 {
+        return Err(
+            "no microphone frames were received; check microphone permissions and selected device"
+                .to_string(),
+        );
+    }
+    if captured_16k.is_empty() {
+        return Err(
+            "captured stream produced zero 16k samples; check input sample rate and microphone"
+                .to_string(),
+        );
+    }
+
     write_wav_f32(&options.out_path, &captured_16k)?;
     let duration_ms = (captured_16k.len() as u64 * 1000) / SAMPLE_RATE_HZ as u64;
+    let rms = if energy_count == 0 {
+        0.0
+    } else {
+        (energy_sum / energy_count as f64).sqrt() as f32
+    };
     eprintln!(
-        "saved benchmark sample: {} ({} ms, {} samples)",
+        "saved benchmark sample: {} ({} ms, {} samples, rms={:.4}, peak={:.4})",
         options.out_path.to_string_lossy(),
         duration_ms,
-        captured_16k.len()
+        captured_16k.len(),
+        rms,
+        peak_abs,
     );
+
+    if peak_abs < 0.015 {
+        eprintln!(
+            "warning: captured level is very low (peak {:.4}); verify microphone selection and gain",
+            peak_abs,
+        );
+    }
+
+    Ok(())
+}
+
+fn list_input_devices() -> Result<(), String> {
+    let devices = audio::list_input_microphones()?;
+    if devices.is_empty() {
+        println!("no input microphones found");
+        return Ok(());
+    }
+
+    println!("available microphones:");
+    for device in devices {
+        let marker = if device.is_default { " (default)" } else { "" };
+        println!("  id={}  {}{}", device.id, device.label, marker);
+    }
     Ok(())
 }
 
@@ -1000,6 +1092,7 @@ fn truncate(value: &str, max_len: usize) -> String {
 fn usage() -> String {
     [
         "usage:",
+        "  transcription-bench devices",
         "  transcription-bench record --out <path.wav> [--seconds 20] [--microphone-id 0] [--sensitivity 170]",
         "  transcription-bench run --audio <path.wav> [--reference <path.txt>] [--case <name>]...",
         "",

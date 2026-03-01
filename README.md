@@ -55,6 +55,18 @@ Record a reproducible benchmark sample from your microphone (16 kHz mono WAV):
 pnpm benchmark:record -- --out benchmark/my-sample.wav --seconds 25
 ```
 
+List available microphone IDs for benchmark recording:
+
+```bash
+pnpm benchmark:devices
+```
+
+Record with an explicit microphone ID:
+
+```bash
+pnpm benchmark:record -- --out benchmark/my-sample.wav --seconds 25 --microphone-id 0
+```
+
 Run comparative benchmark replay across engines/models (same audio each run):
 
 ```bash
