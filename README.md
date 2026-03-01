@@ -138,11 +138,21 @@ Troubleshooting sidecar setup:
 - CUDA backend requires NVIDIA driver + CUDA Toolkit (`nvcc`) in your PATH.
 - Sidecar setup writes backend metadata to `src-tauri/resources/bin/whisper-sidecar.json`; runtime uses it to prefer CPU/CUDA mode.
 - Runtime override: set `SONORA_WHISPER_BACKEND=cpu|cuda|auto` before launching the app.
+- Optional whisper.cpp CUDA runtime path override: set `SONORA_WHISPER_EXTRA_PATH` (PATH-style list).
 - Faster-whisper worker setup requires Python 3.10+ and internet access during build.
 - Faster-whisper model cache is written to `src-tauri/resources/models/faster-whisper-cache`.
 - Default faster-whisper bundle includes English models: `small.en`, `distil-large-v3`, `large-v3`.
 - whisper.cpp q8 bundle now includes `ggml-base.en-q8_0.bin`, `ggml-small.en-q8_0.bin`, and quality bundle includes `ggml-large-v3-turbo-q8_0.bin`.
 - Faster-whisper runtime binary override: set `SONORA_FASTER_WHISPER_BIN` before launching the app.
+- Optional faster-whisper CUDA/cuDNN path override: set `SONORA_FASTER_WHISPER_EXTRA_PATH` (on Windows use `;` between paths).
+
+Example (Windows) to keep whisper.cpp on CUDA 13 and faster-whisper on CUDA 12 + cuDNN:
+
+```powershell
+$env:SONORA_WHISPER_EXTRA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin"
+$env:SONORA_FASTER_WHISPER_EXTRA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin;C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64"
+pnpm tauri dev
+```
 
 ## Test commands
 

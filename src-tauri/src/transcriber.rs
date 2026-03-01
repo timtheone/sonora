@@ -74,6 +74,8 @@ struct WhisperSidecarMetadata {
 const SIDECAR_METADATA_FILE_NAME: &str = "whisper-sidecar.json";
 const BACKEND_ENV_NAME: &str = "SONORA_WHISPER_BACKEND";
 const FASTER_WHISPER_BIN_ENV_NAME: &str = "SONORA_FASTER_WHISPER_BIN";
+const WHISPER_EXTRA_PATH_ENV_NAME: &str = "SONORA_WHISPER_EXTRA_PATH";
+const FASTER_WHISPER_EXTRA_PATH_ENV_NAME: &str = "SONORA_FASTER_WHISPER_EXTRA_PATH";
 const FASTER_WHISPER_DEFAULT_MODEL_FAST: &str = "tiny.en";
 const FASTER_WHISPER_DEFAULT_MODEL_BALANCED: &str = "small.en";
 
@@ -156,6 +158,11 @@ impl WhisperSidecarTranscriber {
         let args = self.config.command_args(&wav_path, &output_prefix);
         let mut command = Command::new(&self.config.binary_path);
         command.args(args);
+
+        if self.config.compute_backend == WhisperComputeBackend::Cuda {
+            let extra_paths = extra_path_entries_from_env(WHISPER_EXTRA_PATH_ENV_NAME);
+            prepend_process_path(&mut command, &extra_paths);
+        }
 
         #[cfg(target_os = "windows")]
         {
@@ -413,6 +420,9 @@ fn ensure_faster_whisper_worker(
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
+    let extra_paths = extra_path_entries_from_env(FASTER_WHISPER_EXTRA_PATH_ENV_NAME);
+    prepend_process_path(&mut command, &extra_paths);
+
     #[cfg(target_os = "windows")]
     {
         command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
@@ -629,7 +639,9 @@ fn build_faster_whisper_runtime(spec: EngineSpec) -> RuntimeEngine {
     let binary_path = resolve_faster_whisper_binary_path(spec.resource_dir.as_deref());
     let model_exists = is_resolvable_faster_whisper_model(&resolved_model_path);
     let resolved_model_reference = normalize_path_for_sidecar(&resolved_model_path);
-    let device = resolve_faster_whisper_device(spec.whisper_backend_preference).to_string();
+    let cuda_runtime_ready = faster_whisper_cuda_runtime_ready();
+    let device = resolve_faster_whisper_device(spec.whisper_backend_preference, cuda_runtime_ready)
+        .to_string();
     let compute_type =
         resolve_faster_whisper_compute_type(device.as_str(), spec.faster_whisper_compute_type)
             .to_string();
@@ -638,6 +650,12 @@ fn build_faster_whisper_runtime(spec: EngineSpec) -> RuntimeEngine {
     let transcriber = if !model_exists {
         RuntimeTranscriber::Unavailable {
             reason: format!("faster-whisper model target not found: {resolved_model_path}"),
+        }
+    } else if spec.whisper_backend_preference == WhisperBackendPreference::Cuda
+        && !cuda_runtime_ready
+    {
+        RuntimeTranscriber::Unavailable {
+            reason: "CUDA backend requested for faster-whisper, but CUDA runtime libraries were not found (missing cublas64_12.dll). Install CUDA runtime or switch backend to auto/cpu.".to_string(),
         }
     } else if let Some(binary_path) = &binary_path {
         RuntimeTranscriber::FasterWhisper(FasterWhisperSidecarTranscriber::new(
@@ -682,19 +700,51 @@ pub fn default_faster_whisper_model(profile: ModelProfile) -> &'static str {
     }
 }
 
-fn resolve_faster_whisper_device(preference: WhisperBackendPreference) -> &'static str {
+fn resolve_faster_whisper_device(
+    preference: WhisperBackendPreference,
+    cuda_runtime_ready: bool,
+) -> &'static str {
     match parse_backend_preference(std::env::var(BACKEND_ENV_NAME).ok().as_deref())
         .unwrap_or(preference)
     {
         WhisperBackendPreference::Cpu => "cpu",
         WhisperBackendPreference::Cuda => "cuda",
         WhisperBackendPreference::Auto => {
-            if has_nvidia_gpu() {
+            if has_nvidia_gpu() && cuda_runtime_ready {
                 "cuda"
             } else {
                 "cpu"
             }
         }
+    }
+}
+
+fn faster_whisper_cuda_runtime_ready() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let from_override_paths = extra_path_entries_from_env(FASTER_WHISPER_EXTRA_PATH_ENV_NAME)
+            .into_iter()
+            .any(|path| path.join("cublas64_12.dll").exists());
+        if from_override_paths {
+            return true;
+        }
+
+        if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+            let candidate = PathBuf::from(cuda_path).join("bin").join("cublas64_12.dll");
+            if candidate.exists() {
+                return true;
+            }
+        }
+
+        let output = Command::new("where").arg("cublas64_12.dll").output();
+        return output
+            .map(|result| result.status.success())
+            .unwrap_or(false);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        true
     }
 }
 
@@ -949,6 +999,39 @@ fn default_faster_whisper_binary_name() -> &'static str {
         "faster-whisper-worker.exe"
     } else {
         "faster-whisper-worker"
+    }
+}
+
+fn extra_path_entries_from_env(var_name: &str) -> Vec<PathBuf> {
+    let separator = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
+    std::env::var(var_name)
+        .ok()
+        .map(|raw| {
+            raw.split(separator)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn prepend_process_path(command: &mut Command, extra_entries: &[PathBuf]) {
+    if extra_entries.is_empty() {
+        return;
+    }
+
+    let mut merged = extra_entries.to_vec();
+    if let Some(existing) = std::env::var_os("PATH") {
+        merged.extend(std::env::split_paths(&existing));
+    }
+
+    if let Ok(joined) = std::env::join_paths(merged) {
+        command.env("PATH", joined);
     }
 }
 
