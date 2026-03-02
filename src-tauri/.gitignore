@@ -7,3 +7,4 @@
 /gen/schemas
 resources/models/
 resources/bin/
+resources/**/__pycache__

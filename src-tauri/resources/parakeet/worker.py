@@ -158,8 +158,26 @@ def handle_transcribe(runtime: ModelRuntime, request: dict):
         prepared_inputs[name] = moved
 
     with torch.inference_mode():
-        logits = model(**prepared_inputs).logits
-        token_ids = torch.argmax(logits, dim=-1)
+        used_generate = False
+        token_ids = None
+
+        if hasattr(model, "generate"):
+            try:
+                generated = model.generate(**prepared_inputs)
+                if hasattr(generated, "sequences"):
+                    token_ids = generated.sequences
+                else:
+                    token_ids = generated
+                used_generate = True
+            except Exception:
+                token_ids = None
+
+        if token_ids is None:
+            logits = model(**prepared_inputs).logits
+            token_ids = torch.argmax(logits, dim=-1)
+
+        if isinstance(token_ids, torch.Tensor) and token_ids.dim() == 1:
+            token_ids = token_ids.unsqueeze(0)
 
     _ = language
     text = processor.batch_decode(token_ids, skip_special_tokens=True)[0].strip()
@@ -172,6 +190,7 @@ def handle_transcribe(runtime: ModelRuntime, request: dict):
             "ok": True,
             "text": text,
             "inference_ms": inference_ms,
+            "decode_mode": "generate" if used_generate else "greedy_argmax",
         }
     )
 

@@ -1299,22 +1299,6 @@ fn phase1_start_live_capture(
         .map(|value| value.trim().to_string())
         .and_then(|value| if value.is_empty() { None } else { Some(value) });
 
-    {
-        let pipeline_guard = store
-            .pipeline
-            .lock()
-            .map_err(|_| "failed to acquire pipeline state".to_string())?;
-        if let Err(error) = pipeline_guard.prepare_transcriber() {
-            let _ = log_store::append(
-                &logs.path,
-                "error",
-                "transcriber.prepare",
-                &format!("failed to prepare transcriber before live capture: {error}"),
-            );
-            return Err(error);
-        }
-    }
-
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let worker = thread::spawn(move || {
         run_live_capture_session(
